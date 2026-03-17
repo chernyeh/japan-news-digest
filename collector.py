@@ -50,6 +50,20 @@ RSS_SOURCES = [
     ("Toyo Keizai",          "https://toyokeizai.net/list/feed/rss",                        "ja"),
     ("Diamond Online",       "https://diamond.jp/list/feed/rss/dol",                        "ja"),
     ("Nikkan Kogyo",         "https://www.nikkan.co.jp/rss/nksrdf.rdf",                      "ja"),
+    # ── Company / Micro news (earnings, M&A, guidance, analyst) ────────────────
+    # Nikkei earnings & corporate actions
+    ("Nikkei IR / Earnings",  "https://news.google.com/rss/search?q=site:nikkei.com+(決算OR業績OR増益OR減益OR配当OR自社株買い)&hl=ja&gl=JP&ceid=JP:ja", "ja"),
+    # Kabutan — Japan's primary dedicated earnings / IR news site
+    ("Kabutan Corporate",     "https://kabutan.jp/rss/news_corporate.xml",                   "ja"),
+    ("Kabutan Earnings",      "https://kabutan.jp/rss/news_kessan.xml",                       "ja"),
+    # Minkabu — retail investor/analyst commentary, stock-specific
+    ("Minkabu",               "https://minkabu.jp/rss/news",                                  "ja"),
+    # Traders Web — corporate disclosures, earnings, analyst ratings
+    ("Traders Web",           "https://www.traders.co.jp/news/rss_all.aspx",                  "ja"),
+    # Reuters company-specific Japan
+    ("Reuters Japan Companies", "https://news.google.com/rss/search?q=reuters+japan+(earnings+OR+profit+OR+forecast+OR+acquisition+OR+merger+OR+dividend)&hl=en&gl=JP&ceid=JP:en", "en"),
+    # Bloomberg Japan company news via Google News proxy
+    ("Bloomberg Japan Co",    "https://news.google.com/rss/search?q=bloomberg+japan+(earnings+OR+results+OR+forecast+OR+buyback+OR+dividend+OR+acquisition)&hl=en&gl=JP&ceid=JP:en", "en"),
 ]
 
 # ── Trade paper scrape targets ────────────────────────────────────────────────
@@ -232,7 +246,58 @@ def classify_sector(title: str, original: str = "") -> str:
     return best if scores[best] > 0 else "General / Macro"
 
 
-# ── RSS fetch ─────────────────────────────────────────────────────────────────
+# Sources that are inherently company/micro-focused
+MICRO_SOURCES = {
+    "Kabutan Corporate", "Kabutan Earnings", "Minkabu", "Traders Web",
+    "Nikkei IR / Earnings", "Reuters Japan Companies", "Bloomberg Japan Co",
+    "Nikkei Xtech IT", "Nikkei Xtech Auto",
+}
+
+# Keyword signals for micro (company-level) news
+MICRO_KEYWORDS = [
+    # English
+    "earnings", "profit", "revenue", "operating income", "net income", "forecast",
+    "guidance", "results", "quarterly", "annual results", "fy20", "q1", "q2", "q3", "q4",
+    "dividend", "buyback", "share repurchase", "acquisition", "merger", "takeover",
+    "deal", "joint venture", "partnership", "contract", "order", "shipment",
+    "analyst", "upgrade", "downgrade", "target price", "rating", "coverage",
+    "ipo", "listing", "secondary offering", "rights issue",
+    "restructuring", "job cuts", "layoffs", "plant closure", "spin-off",
+    "ceo", "president", "management", "appointment", "resignation",
+    # Japanese
+    "決算", "業績", "純利益", "営業利益", "売上", "増益", "減益", "予想", "見通し",
+    "配当", "自社株買い", "買収", "合併", "提携", "受注", "出荷",
+    "アナリスト", "目標株価", "格上げ", "格下げ",
+    "上場", "増資", "公募",
+    "リストラ", "希望退職", "工場閉鎖", "分社",
+    "社長", "代表取締役", "就任", "退任",
+]
+
+# Macro/policy keyword signals
+MACRO_KEYWORDS = [
+    "boj", "bank of japan", "fed", "federal reserve", "ecb", "interest rate",
+    "inflation", "gdp", "trade balance", "current account", "fiscal",
+    "budget", "tax", "policy", "regulation", "ministry", "government",
+    "sanction", "tariff", "trade war", "geopolit",
+    "日銀", "金融政策", "金利", "インフレ", "財政", "予算", "規制", "政策", "関税",
+]
+
+
+def classify_news_type(title: str, original: str, source: str) -> str:
+    """
+    Returns 'micro' (company-level) or 'macro' (economy/policy).
+    Source membership takes priority; keyword scoring breaks ties.
+    """
+    if source in MICRO_SOURCES:
+        return "micro"
+    combined = (title + " " + original).lower()
+    micro_score = sum(1 for kw in MICRO_KEYWORDS if kw in combined)
+    macro_score = sum(1 for kw in MACRO_KEYWORDS if kw in combined)
+    if micro_score > macro_score:
+        return "micro"
+    return "macro"
+
+
 
 def parse_date(entry) -> tuple:
     """Returns (display_string, datetime_object) for sorting and display."""
@@ -374,6 +439,14 @@ SOURCE_DIRECTORY = {
     "Diamond Online":       ("https://diamond.jp/list/feed/rss/dol",                 "ja"),
     "Nikkan Kogyo":         ("https://www.nikkan.co.jp/rss/nksrdf.rdf",              "ja"),
     "FACTA":                 ("https://facta.co.jp/",                                "ja"),
+    # Company / Micro — earnings, IR, M&A, analyst
+    "Nikkei IR / Earnings":  ("https://news.google.com/rss/search?q=site:nikkei.com+(決算OR業績OR増益OR減益OR配当OR自社株買い)&hl=ja&gl=JP&ceid=JP:ja", "ja"),
+    "Kabutan Corporate":     ("https://kabutan.jp/rss/news_corporate.xml",              "ja"),
+    "Kabutan Earnings":      ("https://kabutan.jp/rss/news_kessan.xml",                 "ja"),
+    "Minkabu":               ("https://minkabu.jp/rss/news",                            "ja"),
+    "Traders Web":           ("https://www.traders.co.jp/news/rss_all.aspx",            "ja"),
+    "Reuters Japan Companies": ("https://news.google.com/rss/search?q=reuters+japan+(earnings+OR+profit+OR+forecast+OR+acquisition+OR+merger+OR+dividend)&hl=en&gl=JP&ceid=JP:en", "en"),
+    "Bloomberg Japan Co":    ("https://news.google.com/rss/search?q=bloomberg+japan+(earnings+OR+results+OR+forecast+OR+buyback+OR+dividend+OR+acquisition)&hl=en&gl=JP&ceid=JP:en", "en"),
 }
 
 # Group labels for the UI
@@ -382,9 +455,16 @@ SOURCE_GROUPS = {
         "Japan Times", "Japan Times Business",
         "Reuters Japan", "NHK World Business", "Japan Industry News",
     ],
+    "🇬🇧 English — Company News": [
+        "Reuters Japan Companies", "Bloomberg Japan Co",
+    ],
     "📊 Nikkei Group": [
         "Nikkei Asia", "Nikkei Shimbun", "Nikkei Business",
         "Nikkei Xtech", "Nikkei Xtech IT", "Nikkei Xtech Auto",
+        "Nikkei IR / Earnings",
+    ],
+    "🏢 Corporate / Earnings / IR": [
+        "Kabutan Corporate", "Kabutan Earnings", "Minkabu", "Traders Web",
     ],
     "🇯🇵 Japanese — General": [
         "Asahi Shimbun", "Mainichi Shimbun", "Sankei Shimbun",
@@ -533,10 +613,12 @@ def _fetch_all_news_inner() -> dict:
 
     # Classify
     for a in unique:
-        a["sector"] = classify_sector(
-            a.get("translated_title") or a.get("title", ""),
-            a.get("original_title", "")
-        )
+        title_en = a.get("translated_title") or a.get("title", "")
+        title_orig = a.get("original_title", "")
+        source = a.get("source", "")
+        a["sector"] = classify_sector(title_en, title_orig)
+        a["news_type"] = classify_news_type(title_en, title_orig, source)
+
 
     # Group by MSCI sector
     order = [
