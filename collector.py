@@ -321,6 +321,31 @@ RSS_HEADERS = {
     "Referer": "https://www.google.com/",
 }
 
+def resolve_gnews_url(entry) -> str:
+    """
+    Google News RSS entries wrap the real article URL inside the <description> HTML.
+    Extract it from there. Falls back to entry.link (the redirect URL) if not found.
+
+    Google News description looks like:
+      <a href="https://real-article.com/path">Title</a>&nbsp;<font>Source</font>
+    """
+    # Try description / summary first — contains the real <a href>
+    for field in ("description", "summary", "content"):
+        raw = ""
+        if field == "content":
+            content_list = entry.get("content", [])
+            raw = content_list[0].get("value", "") if content_list else ""
+        else:
+            raw = entry.get(field, "")
+        if raw:
+            m = re.search(r'href=["\']?(https?://(?!news\.google\.)[^"\'>\s]+)', raw)
+            if m:
+                return m.group(1)
+
+    # Fallback: return the entry link as-is (may be a Google redirect)
+    return entry.get("link", "#")
+
+
 def fetch_rss(source_name: str, url: str, language: str) -> list:
     articles = []
     try:
@@ -341,7 +366,7 @@ def fetch_rss(source_name: str, url: str, language: str) -> list:
                 "original_title": title,
                 "translated_title": title if language == "en" else "",
                 "title": title if language == "en" else "",
-                "url": entry.get("link", "#"),
+                "url": resolve_gnews_url(entry),
                 "pub_date": pub_display,
                 "pub_dt": pub_dt,
                 "sector": "",
@@ -520,7 +545,7 @@ def fetch_source_headlines(source_name: str, days: int = 14) -> list:
             if not title:
                 continue
 
-            link    = entry.get("link", "#")
+            link    = resolve_gnews_url(entry)
             summary = re.sub(r"<[^>]+>", "", entry.get("summary", "")[:200])
             pub_str = parse_date(entry)
 
