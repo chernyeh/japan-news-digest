@@ -440,6 +440,71 @@ if "_cache_loaded" not in st.session_state:
 
 
 # ── AI Summary helper ─────────────────────────────────────────────────────────
+def _summary_to_html(text: str) -> str:
+    """Convert AI summary markdown to styled HTML."""
+    import re as _re2, html as _html2
+    lines  = text.split("\n")
+    out    = []
+    in_ul  = False
+    in_intro = True   # first paragraph(s) before any ## header get styled as intro
+
+    for line in lines:
+        line = line.rstrip()
+
+        # Convert **bold** → <strong>
+        line = _re2.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", line)
+
+        # Convert [text](url) → Link button, skip if URL looks truncated/invalid
+        def _make_link(m):
+            _u = m.group(2).strip()
+            if not _u or not _u.startswith("http") or len(_u) < 12:
+                return m.group(1)
+            return f'<a class="summary-link" href="{_u}" target="_blank">Link</a>'
+        line = _re2.sub(r"\[([^\]]+)\]\(([^)]+)\)", _make_link, line)
+
+        if line.startswith("## "):
+            if in_ul:
+                out.append("</ul>"); in_ul = False
+            if in_intro:
+                if out: out.append("</div>")
+                in_intro = False
+            out.append(f'<h2>{line[3:]}</h2>')
+
+        elif line.startswith("# "):
+            if in_ul:
+                out.append("</ul>"); in_ul = False
+            if in_intro and out:
+                out.append("</div>"); in_intro = False
+            out.append(f'<h2>{line[2:]}</h2>')
+
+        elif line.startswith("- ") or line.startswith("* "):
+            if in_intro and out:
+                out.append("</div>"); in_intro = False
+            if not in_ul:
+                out.append("<ul>"); in_ul = True
+            out.append(f"<li>{line[2:]}</li>")
+
+        elif line.strip() == "":
+            if in_ul:
+                out.append("</ul>"); in_ul = False
+
+        else:
+            if in_ul:
+                out.append("</ul>"); in_ul = False
+            if in_intro:
+                if not any("<div class" in o for o in out):
+                    out.append('<div class="intro-block">')
+                out.append(f"<p>{line}</p>")
+            else:
+                out.append(f"<p>{line}</p>")
+
+    if in_ul:
+        out.append("</ul>")
+    if in_intro and any("<div class" in o for o in out):
+        out.append("</div>")
+    return "\n".join(out)
+
+
 def render_ai_summary(articles: list, context: str, session_key: str, max_articles: int = 60):
     """
     Renders an AI-powered summary panel with a Generate button.
@@ -538,71 +603,6 @@ Respond only with the briefing."""
                         st.error(f"AI summary error: {e}")
 
     if st.session_state[session_key]:
-        def _summary_to_html(text: str) -> str:
-            """Convert AI summary markdown to styled HTML."""
-            import re as _re2, html as _html2
-            lines  = text.split("\n")
-            out    = []
-            in_ul  = False
-            in_intro = True   # first paragraph(s) before any ## header get styled as intro
-
-            for line in lines:
-                line = line.rstrip()
-
-                # Convert **bold** → <strong>
-                line = _re2.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", line)
-
-                # Convert [text](url) → Link button, skip if URL looks truncated/invalid
-                def _make_link(m):
-                    _u = m.group(2).strip()
-                    if not _u or not _u.startswith("http") or len(_u) < 12:
-                        return m.group(1)  # just return the text, no link
-                    return f'<a class="summary-link" href="{_u}" target="_blank">Link</a>'
-                line = _re2.sub(r"\[([^\]]+)\]\(([^)]+)\)", _make_link, line)
-
-                if line.startswith("## "):
-                    if in_ul:
-                        out.append("</ul>"); in_ul = False
-                    if in_intro:
-                        if out: out.append("</div>")
-                        in_intro = False
-                    out.append(f'<h2>{line[3:]}</h2>')
-
-                elif line.startswith("# "):
-                    if in_ul:
-                        out.append("</ul>"); in_ul = False
-                    if in_intro and out:
-                        out.append("</div>"); in_intro = False
-                    out.append(f'<h2>{line[2:]}</h2>')
-
-                elif line.startswith("- ") or line.startswith("* "):
-                    if in_intro and out:
-                        out.append("</div>"); in_intro = False
-                    if not in_ul:
-                        out.append("<ul>"); in_ul = True
-                    out.append(f"<li>{line[2:]}</li>")
-
-                elif line.strip() == "":
-                    if in_ul:
-                        out.append("</ul>"); in_ul = False
-                    # blank line — skip, spacing handled by CSS
-
-                else:
-                    if in_ul:
-                        out.append("</ul>"); in_ul = False
-                    if in_intro:
-                        if not any("<div class" in o for o in out):
-                            out.append('<div class="intro-block">')
-                        out.append(f"<p>{line}</p>")
-                    else:
-                        out.append(f"<p>{line}</p>")
-
-            if in_ul:
-                out.append("</ul>")
-            if in_intro and any("<div class" in o for o in out):
-                out.append("</div>")
-            return "\n".join(out)
-
         st.markdown(
             '<div class="ai-summary">' + _summary_to_html(st.session_state[session_key]) + '</div>',
             unsafe_allow_html=True
@@ -1254,220 +1254,220 @@ with tab_market:
 
         st.markdown("<hr style='border-color:#D9D3C8;margin:0.9rem 0'>", unsafe_allow_html=True)
 
-        # ── TSE Movers ───────────────────────────────────────
-        movers    = st.session_state.movers or {}
-        scr_data  = st.session_state.get("screen_data", [])
-        topix_ret = st.session_state.get("topix_returns", {})
-        _under_lookup = {d["code"]: d for d in scr_data}  # code → screen row
+    # ── TSE Movers ───────────────────────────────────────
+    movers    = st.session_state.movers or {}
+    scr_data  = st.session_state.get("screen_data", [])
+    topix_ret = st.session_state.get("topix_returns", {})
+    _under_lookup = {d["code"]: d for d in scr_data}  # code → screen row
 
-        # Threshold for flag — share the screener slider value if set, else 10%
-        _mover_threshold = st.session_state.get("scr_threshold", 10)
+    # Threshold for flag — share the screener slider value if set, else 10%
+    _mover_threshold = st.session_state.get("scr_threshold", 10)
 
-        def _under_flags(symbol: str) -> str:
-            """Return underperformance badges for a mover card given its .T symbol."""
-            code = symbol.replace(".T", "")
-            d = _under_lookup.get(code)
-            if not d:
-                return ""
-            flags = []
-            for period, key in [("3M", "under_3m"), ("6M", "under_6m"), ("12M", "under_12m")]:
-                val = d.get(key)
-                if val is not None and val < -_mover_threshold:
-                    flags.append(period)
-            if not flags:
-                return ""
+    def _under_flags(symbol: str) -> str:
+        """Return underperformance badges for a mover card given its .T symbol."""
+        code = symbol.replace(".T", "")
+        d = _under_lookup.get(code)
+        if not d:
+            return ""
+        flags = []
+        for period, key in [("3M", "under_3m"), ("6M", "under_6m"), ("12M", "under_12m")]:
+            val = d.get(key)
+            if val is not None and val < -_mover_threshold:
+                flags.append(period)
+        if not flags:
+            return ""
+        return (
+            f' <span style="background:#C62828;color:white;font-size:0.52rem;font-weight:700;'
+            f'padding:0.04rem 0.28rem;border-radius:2px;letter-spacing:0.05em;vertical-align:middle;">'
+            f'⚠ {" ".join(flags)}</span>'
+        )
+
+    col3, col4 = st.columns(2)
+    with col3:
+        st.markdown('<div class="section-title">🚀 Top Gainers</div>', unsafe_allow_html=True)
+        gainers = movers.get("gainers", [])
+        if gainers:
+            html = ""
+            for m in gainers:
+                flags_html = _under_flags(m["symbol"])
+                html += (
+                    '<div class="mover-card up">'
+                    '<div><div class="mover-name">' + m["name"] + flags_html + '</div>'
+                    '<div class="mover-sym">' + m["symbol"] + " · ¥" + f'{m["price"]:,.0f}' + '</div></div>'
+                    '<div class="mover-pct-up">▲ ' + f'{m["pct_change"]:.2f}%' + '</div>'
+                    '</div>'
+                )
+            st.markdown(html, unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="info-box">No mover data available.</div>', unsafe_allow_html=True)
+    with col4:
+        st.markdown('<div class="section-title">📉 Top Losers</div>', unsafe_allow_html=True)
+        losers = movers.get("losers", [])
+        if losers:
+            html = ""
+            for m in losers:
+                flags_html = _under_flags(m["symbol"])
+                html += (
+                    '<div class="mover-card dn">'
+                    '<div><div class="mover-name">' + m["name"] + flags_html + '</div>'
+                    '<div class="mover-sym">' + m["symbol"] + " · ¥" + f'{m["price"]:,.0f}' + '</div></div>'
+                    '<div class="mover-pct-dn">▼ ' + f'{abs(m["pct_change"]):.2f}%' + '</div>'
+                    '</div>'
+                )
+            st.markdown(html, unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="info-box">No mover data available.</div>', unsafe_allow_html=True)
+    if scr_data:
+        st.markdown(
+            f'<div style="font-size:0.62rem;color:#9B8B7A;margin-top:0.2rem;">'
+            f'⚠ badge = underperforms TOPIX by >{_mover_threshold}% · '
+            f'Run <strong>🔬 Screener</strong> tab to populate flags</div>',
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            '<div style="font-size:0.62rem;color:#9B8B7A;margin-top:0.2rem;">'
+            'Run the <strong>🔬 Screener</strong> tab to add underperformance flags to movers.</div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown("<hr style='border-color:#D9D3C8;margin:0.9rem 0'>", unsafe_allow_html=True)
+
+    # ── Foreign flow ─────────────────────────────────────
+    st.markdown('<div class="section-title">🌍 Foreign Investor Flow</div>', unsafe_allow_html=True)
+    flow = st.session_state.foreign_flow
+    if flow and flow.get("available"):
+        net = flow["net_billion_yen"]
+        val_class = "flow-value-up" if net > 0 else "flow-value-dn"
+        arrow = "▲" if net > 0 else "▼"
+        st.markdown(
+            '<div class="flow-box">'
+            '<div class="ticker-label">Weekly Net Flow — Foreign Investors (TSE)</div>'
+            '<div class="' + val_class + '">' + arrow + " ¥" + f"{abs(net):.1f}B" + '</div>'
+            '<div class="flow-label">' + flow.get("direction","") + " · " + flow.get("as_of","") + '</div>'
+            '</div>',
+            unsafe_allow_html=True
+        )
+    else:
+        jpx_url = (flow or {}).get("jpx_url", "https://www.jpx.co.jp/english/markets/statistics-equities/investor-type/index.html")
+        st.markdown(
+            '<div class="info-box">Foreign flow data published weekly by JPX (Thursdays). '
+            '<a href="' + jpx_url + '" target="_blank" style="color:#8B4513;">→ View on JPX</a></div>',
+            unsafe_allow_html=True
+        )
+
+    st.markdown("""
+    <div class="info-box" style="margin-top:0.8rem">
+        <strong>Key BOJ/macro themes:</strong> Rate normalisation · YCC exit · Yen carry trade ·
+        Shunto wage growth · Core CPI · TSE capital efficiency reforms (PBR &lt; 1x pressure)
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Daily Market Wrap ─────────────────────────────────────────────────
+    st.markdown("<hr style='border-color:#D9D3C8;margin:1rem 0 0.5rem'>", unsafe_allow_html=True)
+    st.markdown('<div class="section-title" style="font-size:0.95rem;">📰 Daily Market Wrap</div>', unsafe_allow_html=True)
+
+    jpx = st.session_state.get("jpx_movers", {})
+    topix_ret = st.session_state.get("topix_returns", {})
+
+    if not jpx:
+        st.markdown(
+            '<div class="empty-state">Click <strong>📈 Markets</strong> to load today\'s market wrap.</div>',
+            unsafe_allow_html=True
+        )
+    else:
+        jpx_date   = jpx.get("date", "")
+        advancing  = jpx.get("advancing", 0)
+        declining  = jpx.get("declining", 0)
+        unchanged  = jpx.get("unchanged", 0)
+        total      = jpx.get("total_stocks", 0)
+        src_label  = jpx.get("source", "")
+
+        # Breadth bar
+        if total > 0:
+            adv_pct = advancing / total * 100
+            dec_pct = declining / total * 100
+            st.markdown(
+                f'<div style="margin:0.4rem 0 0.6rem;">'
+                f'<span style="font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#9B8B7A;">Market breadth · {jpx_date}</span><br>'
+                f'<span style="color:#2E7D32;font-weight:700;">▲ {advancing} advancing</span>'
+                f'  <span style="color:#9B8B7A;font-size:0.8rem;">·</span>  '
+                f'<span style="color:#C62828;font-weight:700;">▼ {declining} declining</span>'
+                f'  <span style="color:#9B8B7A;font-size:0.8rem;">·</span>  '
+                f'<span style="color:#9B8B7A;">{unchanged} unchanged</span>'
+                f'  <span style="color:#9B8B7A;font-size:0.75rem;">of {total} stocks</span>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+        # Top movers table
+        col_g, col_l = st.columns(2)
+        def _mover_row(m):
+            pct = m.get("pct_change", 0)
+            col  = "#2E7D32" if pct >= 0 else "#C62828"
+            sign = "+" if pct >= 0 else ""
             return (
-                f' <span style="background:#C62828;color:white;font-size:0.52rem;font-weight:700;'
-                f'padding:0.04rem 0.28rem;border-radius:2px;letter-spacing:0.05em;vertical-align:middle;">'
-                f'⚠ {" ".join(flags)}</span>'
+                f'<div style="padding:0.25rem 0;border-bottom:1px solid #EDE8E0;">'
+                f'<span style="font-size:0.78rem;font-weight:600;">{m.get("name","")}</span> '
+                f'<span style="font-size:0.65rem;color:#9B8B7A;">{m.get("code","")}</span><br>'
+                f'<span style="font-size:0.75rem;color:#9B8B7A;">{m.get("sector","")[:28]}</span>'
+                f'<span style="float:right;font-weight:700;color:{col};">{sign}{pct:.2f}%</span>'
+                f'</div>'
             )
 
-        col3, col4 = st.columns(2)
-        with col3:
-            st.markdown('<div class="section-title">🚀 Top Gainers</div>', unsafe_allow_html=True)
-            gainers = movers.get("gainers", [])
-            if gainers:
-                html = ""
-                for m in gainers:
-                    flags_html = _under_flags(m["symbol"])
-                    html += (
-                        '<div class="mover-card up">'
-                        '<div><div class="mover-name">' + m["name"] + flags_html + '</div>'
-                        '<div class="mover-sym">' + m["symbol"] + " · ¥" + f'{m["price"]:,.0f}' + '</div></div>'
-                        '<div class="mover-pct-up">▲ ' + f'{m["pct_change"]:.2f}%' + '</div>'
-                        '</div>'
-                    )
-                st.markdown(html, unsafe_allow_html=True)
+        with col_g:
+            st.markdown('<div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#2E7D32;margin-bottom:0.3rem;">Top Gainers</div>', unsafe_allow_html=True)
+            gainer_html = "".join(_mover_row(m) for m in jpx.get("gainers", [])[:8])
+            st.markdown(gainer_html or "<div style='color:#9B8B7A;font-size:0.8rem;'>No data</div>", unsafe_allow_html=True)
+
+        with col_l:
+            st.markdown('<div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#C62828;margin-bottom:0.3rem;">Top Losers</div>', unsafe_allow_html=True)
+            loser_html = "".join(_mover_row(m) for m in jpx.get("losers", [])[:8])
+            st.markdown(loser_html or "<div style='color:#9B8B7A;font-size:0.8rem;'>No data</div>", unsafe_allow_html=True)
+
+        # AI Market Wrap narrative
+        st.markdown("<div style='margin-top:0.8rem;'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="section-title" style="font-size:0.78rem;margin-top:0.2rem;">✨ AI Market Wrap</div>', unsafe_allow_html=True)
+
+        if "ai_market_wrap" not in st.session_state:
+            st.session_state.ai_market_wrap = None
+
+        col_w1, col_w2 = st.columns([4, 1])
+        with col_w2:
+            gen_wrap = st.button("✨ Generate", key="btn_market_wrap", use_container_width=True)
+        with col_w1:
+            if st.session_state.ai_market_wrap:
+                st.markdown('<div style="font-size:0.68rem;color:#9B8B7A;padding-top:0.45rem;">AI wrap generated · click Generate to refresh</div>', unsafe_allow_html=True)
+
+        if gen_wrap:
+            api_key = get_secret("ANTHROPIC_API_KEY")
+            if not api_key:
+                st.warning("ANTHROPIC_API_KEY not set in Streamlit Secrets.")
             else:
-                st.markdown('<div class="info-box">No mover data available.</div>', unsafe_allow_html=True)
-        with col4:
-            st.markdown('<div class="section-title">📉 Top Losers</div>', unsafe_allow_html=True)
-            losers = movers.get("losers", [])
-            if losers:
-                html = ""
-                for m in losers:
-                    flags_html = _under_flags(m["symbol"])
-                    html += (
-                        '<div class="mover-card dn">'
-                        '<div><div class="mover-name">' + m["name"] + flags_html + '</div>'
-                        '<div class="mover-sym">' + m["symbol"] + " · ¥" + f'{m["price"]:,.0f}' + '</div></div>'
-                        '<div class="mover-pct-dn">▼ ' + f'{abs(m["pct_change"]):.2f}%' + '</div>'
-                        '</div>'
-                    )
-                st.markdown(html, unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="info-box">No mover data available.</div>', unsafe_allow_html=True)
-        if scr_data:
-            st.markdown(
-                f'<div style="font-size:0.62rem;color:#9B8B7A;margin-top:0.2rem;">'
-                f'⚠ badge = underperforms TOPIX by >{_mover_threshold}% · '
-                f'Run <strong>🔬 Screener</strong> tab to populate flags</div>',
-                unsafe_allow_html=True
-            )
-        else:
-            st.markdown(
-                '<div style="font-size:0.62rem;color:#9B8B7A;margin-top:0.2rem;">'
-                'Run the <strong>🔬 Screener</strong> tab to add underperformance flags to movers.</div>',
-                unsafe_allow_html=True
-            )
-
-        st.markdown("<hr style='border-color:#D9D3C8;margin:0.9rem 0'>", unsafe_allow_html=True)
-
-        # ── Foreign flow ─────────────────────────────────────
-        st.markdown('<div class="section-title">🌍 Foreign Investor Flow</div>', unsafe_allow_html=True)
-        flow = st.session_state.foreign_flow
-        if flow and flow.get("available"):
-            net = flow["net_billion_yen"]
-            val_class = "flow-value-up" if net > 0 else "flow-value-dn"
-            arrow = "▲" if net > 0 else "▼"
-            st.markdown(
-                '<div class="flow-box">'
-                '<div class="ticker-label">Weekly Net Flow — Foreign Investors (TSE)</div>'
-                '<div class="' + val_class + '">' + arrow + " ¥" + f"{abs(net):.1f}B" + '</div>'
-                '<div class="flow-label">' + flow.get("direction","") + " · " + flow.get("as_of","") + '</div>'
-                '</div>',
-                unsafe_allow_html=True
-            )
-        else:
-            jpx_url = (flow or {}).get("jpx_url", "https://www.jpx.co.jp/english/markets/statistics-equities/investor-type/index.html")
-            st.markdown(
-                '<div class="info-box">Foreign flow data published weekly by JPX (Thursdays). '
-                '<a href="' + jpx_url + '" target="_blank" style="color:#8B4513;">→ View on JPX</a></div>',
-                unsafe_allow_html=True
-            )
-
-        st.markdown("""
-        <div class="info-box" style="margin-top:0.8rem">
-            <strong>Key BOJ/macro themes:</strong> Rate normalisation · YCC exit · Yen carry trade ·
-            Shunto wage growth · Core CPI · TSE capital efficiency reforms (PBR &lt; 1x pressure)
-        </div>
-        """, unsafe_allow_html=True)
-
-        # ── Daily Market Wrap ─────────────────────────────────────────────────
-        st.markdown("<hr style='border-color:#D9D3C8;margin:1rem 0 0.5rem'>", unsafe_allow_html=True)
-        st.markdown('<div class="section-title" style="font-size:0.95rem;">📰 Daily Market Wrap</div>', unsafe_allow_html=True)
-
-        jpx = st.session_state.get("jpx_movers", {})
-        topix_ret = st.session_state.get("topix_returns", {})
-
-        if not jpx:
-            st.markdown(
-                '<div class="empty-state">Click <strong>📈 Markets</strong> to load today\'s market wrap.</div>',
-                unsafe_allow_html=True
-            )
-        else:
-            jpx_date   = jpx.get("date", "")
-            advancing  = jpx.get("advancing", 0)
-            declining  = jpx.get("declining", 0)
-            unchanged  = jpx.get("unchanged", 0)
-            total      = jpx.get("total_stocks", 0)
-            src_label  = jpx.get("source", "")
-
-            # Breadth bar
-            if total > 0:
-                adv_pct = advancing / total * 100
-                dec_pct = declining / total * 100
-                st.markdown(
-                    f'<div style="margin:0.4rem 0 0.6rem;">'
-                    f'<span style="font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#9B8B7A;">Market breadth · {jpx_date}</span><br>'
-                    f'<span style="color:#2E7D32;font-weight:700;">▲ {advancing} advancing</span>'
-                    f'  <span style="color:#9B8B7A;font-size:0.8rem;">·</span>  '
-                    f'<span style="color:#C62828;font-weight:700;">▼ {declining} declining</span>'
-                    f'  <span style="color:#9B8B7A;font-size:0.8rem;">·</span>  '
-                    f'<span style="color:#9B8B7A;">{unchanged} unchanged</span>'
-                    f'  <span style="color:#9B8B7A;font-size:0.75rem;">of {total} stocks</span>'
-                    f'</div>',
-                    unsafe_allow_html=True
+                import anthropic as _ant
+                # Build context: market breadth + movers + recent filings + news
+                gainers_txt = "\n".join(f"  +{m['pct_change']:.2f}% {m['name']} ({m.get('sector','')})" for m in jpx.get("gainers",[])[:8])
+                losers_txt  = "\n".join(f"  {m['pct_change']:.2f}% {m['name']} ({m.get('sector','')})" for m in jpx.get("losers",[])[:8])
+                topix_txt   = ""
+                if topix_ret:
+                    topix_txt = f"TOPIX benchmark: 3M {topix_ret.get('3M','N/A')}, 6M {topix_ret.get('6M','N/A')}, 12M {topix_ret.get('12M','N/A')}"
+                # Recent news
+                _news_arts = []
+                for _sec_arts in st.session_state.get("articles", {}).values():
+                    _news_arts.extend(_sec_arts)
+                _news_arts.sort(key=lambda a: a.get("pub_dt") or __import__("datetime").datetime.min, reverse=True)
+                news_lines = "\n".join(
+                    f"- [{a.get('source','')}] {a.get('translated_title') or a.get('title','')}"
+                    for a in _news_arts[:30]
+                )
+                # Recent filings
+                filings = st.session_state.get("filings", [])
+                filing_lines = "\n".join(
+                    f"- [{f.get('code','')} {f.get('name_en') or f.get('name','')}] {f.get('title_en') or f.get('title','')}"
+                    for f in filings[:15]
                 )
 
-            # Top movers table
-            col_g, col_l = st.columns(2)
-            def _mover_row(m):
-                pct = m.get("pct_change", 0)
-                col  = "#2E7D32" if pct >= 0 else "#C62828"
-                sign = "+" if pct >= 0 else ""
-                return (
-                    f'<div style="padding:0.25rem 0;border-bottom:1px solid #EDE8E0;">'
-                    f'<span style="font-size:0.78rem;font-weight:600;">{m.get("name","")}</span> '
-                    f'<span style="font-size:0.65rem;color:#9B8B7A;">{m.get("code","")}</span><br>'
-                    f'<span style="font-size:0.75rem;color:#9B8B7A;">{m.get("sector","")[:28]}</span>'
-                    f'<span style="float:right;font-weight:700;color:{col};">{sign}{pct:.2f}%</span>'
-                    f'</div>'
-                )
-
-            with col_g:
-                st.markdown('<div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#2E7D32;margin-bottom:0.3rem;">Top Gainers</div>', unsafe_allow_html=True)
-                gainer_html = "".join(_mover_row(m) for m in jpx.get("gainers", [])[:8])
-                st.markdown(gainer_html or "<div style='color:#9B8B7A;font-size:0.8rem;'>No data</div>", unsafe_allow_html=True)
-
-            with col_l:
-                st.markdown('<div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#C62828;margin-bottom:0.3rem;">Top Losers</div>', unsafe_allow_html=True)
-                loser_html = "".join(_mover_row(m) for m in jpx.get("losers", [])[:8])
-                st.markdown(loser_html or "<div style='color:#9B8B7A;font-size:0.8rem;'>No data</div>", unsafe_allow_html=True)
-
-            # AI Market Wrap narrative
-            st.markdown("<div style='margin-top:0.8rem;'></div>", unsafe_allow_html=True)
-            st.markdown('<div class="section-title" style="font-size:0.78rem;margin-top:0.2rem;">✨ AI Market Wrap</div>', unsafe_allow_html=True)
-
-            if "ai_market_wrap" not in st.session_state:
-                st.session_state.ai_market_wrap = None
-
-            col_w1, col_w2 = st.columns([4, 1])
-            with col_w2:
-                gen_wrap = st.button("✨ Generate", key="btn_market_wrap", use_container_width=True)
-            with col_w1:
-                if st.session_state.ai_market_wrap:
-                    st.markdown('<div style="font-size:0.68rem;color:#9B8B7A;padding-top:0.45rem;">AI wrap generated · click Generate to refresh</div>', unsafe_allow_html=True)
-
-            if gen_wrap:
-                api_key = get_secret("ANTHROPIC_API_KEY")
-                if not api_key:
-                    st.warning("ANTHROPIC_API_KEY not set in Streamlit Secrets.")
-                else:
-                    import anthropic as _ant
-                    # Build context: market breadth + movers + recent filings + news
-                    gainers_txt = "\n".join(f"  +{m['pct_change']:.2f}% {m['name']} ({m.get('sector','')})" for m in jpx.get("gainers",[])[:8])
-                    losers_txt  = "\n".join(f"  {m['pct_change']:.2f}% {m['name']} ({m.get('sector','')})" for m in jpx.get("losers",[])[:8])
-                    topix_txt   = ""
-                    if topix_ret:
-                        topix_txt = f"TOPIX benchmark: 3M {topix_ret.get('3M','N/A')}, 6M {topix_ret.get('6M','N/A')}, 12M {topix_ret.get('12M','N/A')}"
-                    # Recent news
-                    _news_arts = []
-                    for _sec_arts in st.session_state.get("articles", {}).values():
-                        _news_arts.extend(_sec_arts)
-                    _news_arts.sort(key=lambda a: a.get("pub_dt") or __import__("datetime").datetime.min, reverse=True)
-                    news_lines = "\n".join(
-                        f"- [{a.get('source','')}] {a.get('translated_title') or a.get('title','')}"
-                        for a in _news_arts[:30]
-                    )
-                    # Recent filings
-                    filings = st.session_state.get("filings", [])
-                    filing_lines = "\n".join(
-                        f"- [{f.get('code','')} {f.get('name_en') or f.get('name','')}] {f.get('title_en') or f.get('title','')}"
-                        for f in filings[:15]
-                    )
-
-                    prompt = f"""You are a Japan equity analyst writing a concise daily market wrap for an investor.
+                prompt = f"""You are a Japan equity analyst writing a concise daily market wrap for an investor.
 
 Date: {jpx_date}
 Market breadth: {advancing} advancing / {declining} declining / {unchanged} unchanged ({total} total TSE stocks)
@@ -1500,23 +1500,23 @@ Format rules:
 
 Respond only with the market wrap."""
 
-                    with st.spinner("Generating market wrap..."):
-                        try:
-                            _client = _ant.Anthropic(api_key=api_key)
-                            _resp   = _client.messages.create(
-                                model="claude-haiku-4-5-20251001",
-                                max_tokens=2000,
-                                messages=[{"role": "user", "content": prompt}]
-                            )
-                            st.session_state.ai_market_wrap = _resp.content[0].text
-                        except Exception as e:
-                            st.error(f"AI wrap error: {e}")
+                with st.spinner("Generating market wrap..."):
+                    try:
+                        _client = _ant.Anthropic(api_key=api_key)
+                        _resp   = _client.messages.create(
+                            model="claude-haiku-4-5-20251001",
+                            max_tokens=2000,
+                            messages=[{"role": "user", "content": prompt}]
+                        )
+                        st.session_state.ai_market_wrap = _resp.content[0].text
+                    except Exception as e:
+                        st.error(f"AI wrap error: {e}")
 
-            if st.session_state.ai_market_wrap:
-                st.markdown(
-                    _summary_to_html(st.session_state.ai_market_wrap),
-                    unsafe_allow_html=True
-                )
+        if st.session_state.ai_market_wrap:
+            st.markdown(
+                _summary_to_html(st.session_state.ai_market_wrap),
+                unsafe_allow_html=True
+            )
 
 # ════════════════════════════════════════════════════════════
 # TAB 3 — WATCHLIST
@@ -2132,7 +2132,7 @@ with tab_screener:
     st.markdown('<div class="section-title">🔬 Performance Screener — TOPIX Top 200</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="info-box">Screen ~200 major TSE stocks for underperformance vs TOPIX over 3, 6 and 12 months. '
-        'Data via Yahoo Finance. Fetching all stocks takes ~60–90 seconds.</div>',
+        'Data via Yahoo Finance. Batch fetch takes ~15–20 seconds.</div>',
         unsafe_allow_html=True
     )
 
