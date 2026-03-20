@@ -3,7 +3,9 @@ from datetime import datetime
 import pytz
 from collector import fetch_all_news, fetch_source_headlines, SOURCE_DIRECTORY, SOURCE_GROUPS
 from emailer import subscribe_email, send_digest, get_secret
-from market_data import fetch_market_overview, fetch_tse_movers, fetch_foreign_flow
+from market_data import (fetch_market_overview, fetch_tse_movers, fetch_foreign_flow,
+                          fetch_jpx_daily_movers, fetch_topix_returns,
+                          fetch_underperformance_screen, TSE_STOCKS)
 from watchlist import (load_watchlist, add_to_watchlist, remove_from_watchlist,
                        scan_all_watchlist, KNOWN_COMPANIES)
 from sentiment import score_all_sectors, flag_high_value_articles
@@ -613,7 +615,7 @@ st.markdown(f"""
     <div class="masthead-sub">Japan equities · macro · corporate news · TDnet filings · JPY rates</div>
     <div class="masthead-date">{now_local().strftime('%A, %d %B %Y · %H:%M MYT')}</div>
 </div>
-<div class="dateline-strip">Petaling Jaya · Nikkei 225 · TOPIX · JPY Rates · TSE Timely Disclosures · 36 News Sources</div>
+<div class="dateline-strip">Petaling Jaya · Nikkei 225 · TOPIX · JPY Rates · TSE Timely Disclosures · 32 News Sources</div>
 """, unsafe_allow_html=True)
 
 # ── Market ticker strip ───────────────────────────────────────────────────────
@@ -684,11 +686,15 @@ with col_mkt:
             st.session_state.market_data = fetch_market_overview()
             st.session_state.movers = fetch_tse_movers()
             st.session_state.foreign_flow = fetch_foreign_flow()
+            st.session_state.jpx_movers = fetch_jpx_daily_movers()
+            st.session_state.topix_returns = fetch_topix_returns()
             st.session_state.last_market_fetch = now_local()
             _c = _get_app_cache()
             _c["market_data"]       = st.session_state.market_data
             _c["movers"]            = st.session_state.movers
             _c["foreign_flow"]      = st.session_state.foreign_flow
+            _c["jpx_movers"]        = st.session_state.jpx_movers
+            _c["topix_returns"]     = st.session_state.topix_returns
             _c["last_market_fetch"] = st.session_state.last_market_fetch
         st.rerun()
 with col_news:
@@ -725,6 +731,8 @@ with col_news:
                 st.session_state.market_data = fetch_market_overview()
                 st.session_state.movers = fetch_tse_movers()
                 st.session_state.foreign_flow = fetch_foreign_flow()
+                st.session_state.jpx_movers = fetch_jpx_daily_movers()
+                st.session_state.topix_returns = fetch_topix_returns()
                 st.session_state.last_market_fetch = now_local()
             # Save to shared cache so next session restores this data
             _c = _get_app_cache()
@@ -785,12 +793,46 @@ elif _from_cache and not _stale_news and not _stale_market:
 
 st.markdown("<div style='margin-bottom:0.2rem'></div>", unsafe_allow_html=True)
 
+
+# ── Digest webhook (triggered by cron-job.org or GitHub Actions) ─────────────
+# Hit: https://your-app.streamlit.app/?digest=premarket  or  ?digest=close
+_digest_trigger = st.query_params.get("digest", "")
+if _digest_trigger in ("premarket", "close"):
+    _wh_token  = get_secret("DIGEST_WEBHOOK_TOKEN")
+    _req_token = st.query_params.get("token", "")
+    if _wh_token and _req_token != _wh_token:
+        st.error("Unauthorised digest request.")
+        st.stop()
+    # Ensure we have data — fetch if needed
+    _wh_articles = st.session_state.get("articles") or {}
+    _wh_market   = st.session_state.get("market_data")
+    _wh_filings  = st.session_state.get("filings", [])
+    if not _wh_articles:
+        from collector import fetch_all_news as _fn
+        _wh_sector_map, _ = _fn()
+        _wh_articles = _wh_sector_map
+    if not _wh_market:
+        _wh_market = fetch_market_overview()
+    try:
+        from emailer import send_digest as _sd
+        _ok = _sd(
+            articles_by_sector=_wh_articles,
+            edition=_digest_trigger,
+            market_data=_wh_market,
+            filings=_wh_filings,
+        )
+        st.success(f"✅ {_digest_trigger.title()} digest sent to all subscribers." if _ok
+                   else "⚠️ Digest send failed — check SENDGRID_API_KEY.")
+    except Exception as _e:
+        st.error(f"Digest webhook error: {_e}")
+    st.stop()
+
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 (tab_market, tab_bytime, tab_breaking, tab_news, tab_bysource,
- tab_sources, tab_filings, tab_sentiment, tab_watchlist, tab_subscribe) = st.tabs([
+ tab_sources, tab_filings, tab_sentiment, tab_watchlist, tab_screener, tab_subscribe) = st.tabs([
     "📊 Markets", "🕐 By Time", "⚡ Breaking News", "📰 By Industry",
     "📁 By Source", "🔗 Sources", "📋 Co Filings",
-    "🌡️ Sentiment", "⭐ Watchlist", "📬 Subscribe",
+    "🌡️ Sentiment", "⭐ Watchlist", "🔬 Screener", "📬 Subscribe",
 ])
 
 # ════════════════════════════════════════════════════════════
@@ -1022,15 +1064,20 @@ with tab_news:
         if st.session_state.selected_sector in sector_names:
             current_index = sector_names.index(st.session_state.selected_sector)
 
+        def _on_sector_change():
+            st.session_state.selected_sector = sector_names[
+                sector_labels.index(st.session_state._sector_sel)
+            ]
+
         selected_label = st.selectbox(
             "Sector:", options=sector_labels, index=current_index,
-            label_visibility="collapsed", key="sector_selector"
+            label_visibility="collapsed", key="_sector_sel",
+            on_change=_on_sector_change,
         )
-        # Update immediately on change — no double-click needed
-        new_sector = sector_names[sector_labels.index(selected_label)]
-        if new_sector != st.session_state.selected_sector:
-            st.session_state.selected_sector = new_sector
-            st.rerun()
+        # Sync in case on_change hasn't fired yet (first render)
+        _cur = sector_names[sector_labels.index(selected_label)]
+        if _cur != st.session_state.selected_sector:
+            st.session_state.selected_sector = _cur
 
         sector_name = st.session_state.selected_sector
         raw_articles = st.session_state.articles.get(sector_name, [])
@@ -1208,7 +1255,33 @@ with tab_market:
         st.markdown("<hr style='border-color:#D9D3C8;margin:0.9rem 0'>", unsafe_allow_html=True)
 
         # ── TSE Movers ───────────────────────────────────────
-        movers = st.session_state.movers or {}
+        movers    = st.session_state.movers or {}
+        scr_data  = st.session_state.get("screen_data", [])
+        topix_ret = st.session_state.get("topix_returns", {})
+        _under_lookup = {d["code"]: d for d in scr_data}  # code → screen row
+
+        # Threshold for flag — share the screener slider value if set, else 10%
+        _mover_threshold = st.session_state.get("scr_threshold", 10)
+
+        def _under_flags(symbol: str) -> str:
+            """Return underperformance badges for a mover card given its .T symbol."""
+            code = symbol.replace(".T", "")
+            d = _under_lookup.get(code)
+            if not d:
+                return ""
+            flags = []
+            for period, key in [("3M", "under_3m"), ("6M", "under_6m"), ("12M", "under_12m")]:
+                val = d.get(key)
+                if val is not None and val < -_mover_threshold:
+                    flags.append(period)
+            if not flags:
+                return ""
+            return (
+                f' <span style="background:#C62828;color:white;font-size:0.52rem;font-weight:700;'
+                f'padding:0.04rem 0.28rem;border-radius:2px;letter-spacing:0.05em;vertical-align:middle;">'
+                f'⚠ {" ".join(flags)}</span>'
+            )
+
         col3, col4 = st.columns(2)
         with col3:
             st.markdown('<div class="section-title">🚀 Top Gainers</div>', unsafe_allow_html=True)
@@ -1216,9 +1289,10 @@ with tab_market:
             if gainers:
                 html = ""
                 for m in gainers:
+                    flags_html = _under_flags(m["symbol"])
                     html += (
                         '<div class="mover-card up">'
-                        '<div><div class="mover-name">' + m["name"] + '</div>'
+                        '<div><div class="mover-name">' + m["name"] + flags_html + '</div>'
                         '<div class="mover-sym">' + m["symbol"] + " · ¥" + f'{m["price"]:,.0f}' + '</div></div>'
                         '<div class="mover-pct-up">▲ ' + f'{m["pct_change"]:.2f}%' + '</div>'
                         '</div>'
@@ -1232,9 +1306,10 @@ with tab_market:
             if losers:
                 html = ""
                 for m in losers:
+                    flags_html = _under_flags(m["symbol"])
                     html += (
                         '<div class="mover-card dn">'
-                        '<div><div class="mover-name">' + m["name"] + '</div>'
+                        '<div><div class="mover-name">' + m["name"] + flags_html + '</div>'
                         '<div class="mover-sym">' + m["symbol"] + " · ¥" + f'{m["price"]:,.0f}' + '</div></div>'
                         '<div class="mover-pct-dn">▼ ' + f'{abs(m["pct_change"]):.2f}%' + '</div>'
                         '</div>'
@@ -1242,6 +1317,19 @@ with tab_market:
                 st.markdown(html, unsafe_allow_html=True)
             else:
                 st.markdown('<div class="info-box">No mover data available.</div>', unsafe_allow_html=True)
+        if scr_data:
+            st.markdown(
+                f'<div style="font-size:0.62rem;color:#9B8B7A;margin-top:0.2rem;">'
+                f'⚠ badge = underperforms TOPIX by >{_mover_threshold}% · '
+                f'Run <strong>🔬 Screener</strong> tab to populate flags</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div style="font-size:0.62rem;color:#9B8B7A;margin-top:0.2rem;">'
+                'Run the <strong>🔬 Screener</strong> tab to add underperformance flags to movers.</div>',
+                unsafe_allow_html=True
+            )
 
         st.markdown("<hr style='border-color:#D9D3C8;margin:0.9rem 0'>", unsafe_allow_html=True)
 
@@ -1274,6 +1362,161 @@ with tab_market:
             Shunto wage growth · Core CPI · TSE capital efficiency reforms (PBR &lt; 1x pressure)
         </div>
         """, unsafe_allow_html=True)
+
+        # ── Daily Market Wrap ─────────────────────────────────────────────────
+        st.markdown("<hr style='border-color:#D9D3C8;margin:1rem 0 0.5rem'>", unsafe_allow_html=True)
+        st.markdown('<div class="section-title" style="font-size:0.95rem;">📰 Daily Market Wrap</div>', unsafe_allow_html=True)
+
+        jpx = st.session_state.get("jpx_movers", {})
+        topix_ret = st.session_state.get("topix_returns", {})
+
+        if not jpx:
+            st.markdown(
+                '<div class="empty-state">Click <strong>📈 Markets</strong> to load today\'s market wrap.</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            jpx_date   = jpx.get("date", "")
+            advancing  = jpx.get("advancing", 0)
+            declining  = jpx.get("declining", 0)
+            unchanged  = jpx.get("unchanged", 0)
+            total      = jpx.get("total_stocks", 0)
+            src_label  = jpx.get("source", "")
+
+            # Breadth bar
+            if total > 0:
+                adv_pct = advancing / total * 100
+                dec_pct = declining / total * 100
+                st.markdown(
+                    f'<div style="margin:0.4rem 0 0.6rem;">'
+                    f'<span style="font-size:0.65rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#9B8B7A;">Market breadth · {jpx_date}</span><br>'
+                    f'<span style="color:#2E7D32;font-weight:700;">▲ {advancing} advancing</span>'
+                    f'  <span style="color:#9B8B7A;font-size:0.8rem;">·</span>  '
+                    f'<span style="color:#C62828;font-weight:700;">▼ {declining} declining</span>'
+                    f'  <span style="color:#9B8B7A;font-size:0.8rem;">·</span>  '
+                    f'<span style="color:#9B8B7A;">{unchanged} unchanged</span>'
+                    f'  <span style="color:#9B8B7A;font-size:0.75rem;">of {total} stocks</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+            # Top movers table
+            col_g, col_l = st.columns(2)
+            def _mover_row(m):
+                pct = m.get("pct_change", 0)
+                col  = "#2E7D32" if pct >= 0 else "#C62828"
+                sign = "+" if pct >= 0 else ""
+                return (
+                    f'<div style="padding:0.25rem 0;border-bottom:1px solid #EDE8E0;">'
+                    f'<span style="font-size:0.78rem;font-weight:600;">{m.get("name","")}</span> '
+                    f'<span style="font-size:0.65rem;color:#9B8B7A;">{m.get("code","")}</span><br>'
+                    f'<span style="font-size:0.75rem;color:#9B8B7A;">{m.get("sector","")[:28]}</span>'
+                    f'<span style="float:right;font-weight:700;color:{col};">{sign}{pct:.2f}%</span>'
+                    f'</div>'
+                )
+
+            with col_g:
+                st.markdown('<div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#2E7D32;margin-bottom:0.3rem;">Top Gainers</div>', unsafe_allow_html=True)
+                gainer_html = "".join(_mover_row(m) for m in jpx.get("gainers", [])[:8])
+                st.markdown(gainer_html or "<div style='color:#9B8B7A;font-size:0.8rem;'>No data</div>", unsafe_allow_html=True)
+
+            with col_l:
+                st.markdown('<div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#C62828;margin-bottom:0.3rem;">Top Losers</div>', unsafe_allow_html=True)
+                loser_html = "".join(_mover_row(m) for m in jpx.get("losers", [])[:8])
+                st.markdown(loser_html or "<div style='color:#9B8B7A;font-size:0.8rem;'>No data</div>", unsafe_allow_html=True)
+
+            # AI Market Wrap narrative
+            st.markdown("<div style='margin-top:0.8rem;'></div>", unsafe_allow_html=True)
+            st.markdown('<div class="section-title" style="font-size:0.78rem;margin-top:0.2rem;">✨ AI Market Wrap</div>', unsafe_allow_html=True)
+
+            if "ai_market_wrap" not in st.session_state:
+                st.session_state.ai_market_wrap = None
+
+            col_w1, col_w2 = st.columns([4, 1])
+            with col_w2:
+                gen_wrap = st.button("✨ Generate", key="btn_market_wrap", use_container_width=True)
+            with col_w1:
+                if st.session_state.ai_market_wrap:
+                    st.markdown('<div style="font-size:0.68rem;color:#9B8B7A;padding-top:0.45rem;">AI wrap generated · click Generate to refresh</div>', unsafe_allow_html=True)
+
+            if gen_wrap:
+                api_key = get_secret("ANTHROPIC_API_KEY")
+                if not api_key:
+                    st.warning("ANTHROPIC_API_KEY not set in Streamlit Secrets.")
+                else:
+                    import anthropic as _ant
+                    # Build context: market breadth + movers + recent filings + news
+                    gainers_txt = "\n".join(f"  +{m['pct_change']:.2f}% {m['name']} ({m.get('sector','')})" for m in jpx.get("gainers",[])[:8])
+                    losers_txt  = "\n".join(f"  {m['pct_change']:.2f}% {m['name']} ({m.get('sector','')})" for m in jpx.get("losers",[])[:8])
+                    topix_txt   = ""
+                    if topix_ret:
+                        topix_txt = f"TOPIX benchmark: 3M {topix_ret.get('3M','N/A')}, 6M {topix_ret.get('6M','N/A')}, 12M {topix_ret.get('12M','N/A')}"
+                    # Recent news
+                    _news_arts = []
+                    for _sec_arts in st.session_state.get("articles", {}).values():
+                        _news_arts.extend(_sec_arts)
+                    _news_arts.sort(key=lambda a: a.get("pub_dt") or __import__("datetime").datetime.min, reverse=True)
+                    news_lines = "\n".join(
+                        f"- [{a.get('source','')}] {a.get('translated_title') or a.get('title','')}"
+                        for a in _news_arts[:30]
+                    )
+                    # Recent filings
+                    filings = st.session_state.get("filings", [])
+                    filing_lines = "\n".join(
+                        f"- [{f.get('code','')} {f.get('name_en') or f.get('name','')}] {f.get('title_en') or f.get('title','')}"
+                        for f in filings[:15]
+                    )
+
+                    prompt = f"""You are a Japan equity analyst writing a concise daily market wrap for an investor.
+
+Date: {jpx_date}
+Market breadth: {advancing} advancing / {declining} declining / {unchanged} unchanged ({total} total TSE stocks)
+{topix_txt}
+
+TOP GAINERS today:
+{gainers_txt}
+
+TOP LOSERS today:
+{losers_txt}
+
+RECENT NEWS HEADLINES:
+{news_lines}
+
+RECENT TDnet FILINGS:
+{filing_lines}
+
+Write a COMPLETE daily market wrap covering:
+1. Opening paragraph: overall market tone and breadth (2-3 sentences)
+2. ## Sector Moves — what drove the biggest movers, with sector context
+3. ## Corporate Catalysts — any filings or news directly linked to big movers
+4. ## What to Watch — 2-3 forward-looking points for the next session
+
+Format rules:
+- Use ## for section headers
+- Bullet points under each section, max 20 words per bullet
+- Link to relevant headlines where possible using [Source](url)
+- Be direct and analytical — no padding
+- COMPLETE the entire wrap, never truncate
+
+Respond only with the market wrap."""
+
+                    with st.spinner("Generating market wrap..."):
+                        try:
+                            _client = _ant.Anthropic(api_key=api_key)
+                            _resp   = _client.messages.create(
+                                model="claude-haiku-4-5-20251001",
+                                max_tokens=2000,
+                                messages=[{"role": "user", "content": prompt}]
+                            )
+                            st.session_state.ai_market_wrap = _resp.content[0].text
+                        except Exception as e:
+                            st.error(f"AI wrap error: {e}")
+
+            if st.session_state.ai_market_wrap:
+                st.markdown(
+                    _summary_to_html(st.session_state.ai_market_wrap),
+                    unsafe_allow_html=True
+                )
 
 # ════════════════════════════════════════════════════════════
 # TAB 3 — WATCHLIST
@@ -1342,6 +1585,113 @@ with tab_watchlist:
                     + date_p + '</div>'
                 )
             st.markdown(html, unsafe_allow_html=True)
+
+    # ── Underperformance vs TOPIX ─────────────────────────────────────────────
+    st.markdown("<hr style='border-color:#D9D3C8;margin:0.8rem 0'>", unsafe_allow_html=True)
+    st.markdown('<div class="section-title" style="font-size:0.95rem;">📉 Underperformance vs TOPIX</div>', unsafe_allow_html=True)
+
+    topix_ret = st.session_state.get("topix_returns", {})
+    screen_data = st.session_state.get("screen_data", [])
+
+    # Build a lookup: company name → screen row (from TSE_STOCKS codes)
+    # Map KNOWN_COMPANIES names to TSE codes
+    _name_to_code = {}
+    for cname, aliases in KNOWN_COMPANIES.items():
+        for a in aliases:
+            if a.isdigit() and len(a) == 4:
+                _name_to_code[cname] = a
+                break
+
+    wl_threshold = st.slider("Flag if underperforms TOPIX by more than (%):", 0, 30, 10, 1, key="wl_under_threshold")
+
+    col_wl_fetch, _ = st.columns([2, 3])
+    with col_wl_fetch:
+        if st.button("📊 Load Performance Data", key="btn_wl_perf", use_container_width=True):
+            with st.spinner("Fetching performance data for watchlist..."):
+                if not topix_ret:
+                    topix_ret = fetch_topix_returns()
+                    st.session_state.topix_returns = topix_ret
+                # Fetch only the watchlist companies
+                _wl_codes = [(c, n) for n in watchlist
+                             for c in [_name_to_code.get(n)] if c]
+                from market_data import fetch_stock_performance
+                _wl_results = {}
+                for code, name in _wl_codes:
+                    d = fetch_stock_performance(code, name)
+                    if d.get("price", 0) > 0:
+                        t3  = topix_ret.get("3M")
+                        t6  = topix_ret.get("6M")
+                        t12 = topix_ret.get("12M")
+                        d["under_3m"]  = (d.get("ret_3m")  - t3)  if d.get("ret_3m")  is not None and t3  is not None else None
+                        d["under_6m"]  = (d.get("ret_6m")  - t6)  if d.get("ret_6m")  is not None and t6  is not None else None
+                        d["under_12m"] = (d.get("ret_12m") - t12) if d.get("ret_12m") is not None and t12 is not None else None
+                        _wl_results[name] = d
+                st.session_state["wl_perf"] = _wl_results
+            st.rerun()
+
+    wl_perf = st.session_state.get("wl_perf", {})
+    topix_3m  = topix_ret.get("3M")
+    topix_6m  = topix_ret.get("6M")
+    topix_12m = topix_ret.get("12M")
+
+    if not wl_perf:
+        st.markdown('<div class="info-box">Click <strong>📊 Load Performance Data</strong> to check underperformance for your watchlist.</div>', unsafe_allow_html=True)
+    else:
+        def _under_badge(val, threshold):
+            if val is None: return '<span style="color:#9B8B7A;font-size:0.72rem;">N/A</span>'
+            color = "#C62828" if val < -threshold else ("#2E7D32" if val >= 0 else "#6B6B6B")
+            flag  = " ⚠️" if val < -threshold else ""
+            return f'<span style="color:{color};font-weight:700;font-size:0.78rem;">{val:+.1f}%{flag}</span>'
+
+        # TOPIX reference row
+        bench_html = (
+            f'<div style="margin-bottom:0.5rem;padding:0.4rem 0.6rem;background:#F0EDE8;border-radius:3px;">'
+            f'<span style="font-size:0.68rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#6B6B6B;">TOPIX Benchmark</span>'
+            f'&nbsp;&nbsp;'
+            f'<span style="font-size:0.75rem;color:#1A1A1A;">3M: <strong>{f"{topix_3m:+.1f}%" if topix_3m else "N/A"}</strong></span>'
+            f'&nbsp;·&nbsp;'
+            f'<span style="font-size:0.75rem;color:#1A1A1A;">6M: <strong>{f"{topix_6m:+.1f}%" if topix_6m else "N/A"}</strong></span>'
+            f'&nbsp;·&nbsp;'
+            f'<span style="font-size:0.75rem;color:#1A1A1A;">12M: <strong>{f"{topix_12m:+.1f}%" if topix_12m else "N/A"}</strong></span>'
+            f'</div>'
+        )
+        st.markdown(bench_html, unsafe_allow_html=True)
+
+        for name in watchlist:
+            d = wl_perf.get(name)
+            if not d:
+                st.markdown(
+                    f'<div style="padding:0.35rem 0;border-bottom:1px solid #EDE8E0;">'
+                    f'<span style="font-size:0.86rem;font-weight:600;">{name}</span>'
+                    f'&nbsp;<span style="color:#9B8B7A;font-size:0.75rem;">— no price data found</span>'
+                    f'</div>', unsafe_allow_html=True)
+                continue
+            flags = []
+            if d.get("under_3m")  is not None and d["under_3m"]  < -wl_threshold: flags.append("3M")
+            if d.get("under_6m")  is not None and d["under_6m"]  < -wl_threshold: flags.append("6M")
+            if d.get("under_12m") is not None and d["under_12m"] < -wl_threshold: flags.append("12M")
+            flag_html = (
+                f'&nbsp;<span style="background:#C62828;color:white;font-size:0.55rem;font-weight:700;'
+                f'padding:0.05rem 0.3rem;border-radius:2px;letter-spacing:0.06em;">⚠ UNDERPERFORM '
+                f'{" ".join(flags)}</span>'
+            ) if flags else ""
+            pct_today = d.get("pct_change", 0)
+            today_col = "#2E7D32" if pct_today >= 0 else "#C62828"
+            row_html = (
+                f'<div style="padding:0.4rem 0;border-bottom:1px solid #EDE8E0;">'
+                f'<div style="display:flex;justify-content:space-between;align-items:baseline;">'
+                f'<span style="font-size:0.86rem;font-weight:600;">{name}</span>{flag_html}'
+                f'<span style="font-size:0.8rem;color:{today_col};font-weight:700;">¥{d["price"]:,.0f} ({pct_today:+.2f}% today)</span>'
+                f'</div>'
+                f'<div style="margin-top:0.2rem;">'
+                f'<span style="font-size:0.7rem;color:#6B6B6B;">vs TOPIX → </span>'
+                f'<span style="font-size:0.72rem;margin-right:0.6rem;">3M: {_under_badge(d.get("under_3m"), wl_threshold)}</span>'
+                f'<span style="font-size:0.72rem;margin-right:0.6rem;">6M: {_under_badge(d.get("under_6m"), wl_threshold)}</span>'
+                f'<span style="font-size:0.72rem;">12M: {_under_badge(d.get("under_12m"), wl_threshold)}</span>'
+                f'</div>'
+                f'</div>'
+            )
+            st.markdown(row_html, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
 
@@ -1612,38 +1962,44 @@ with tab_bysource:
         unsafe_allow_html=True
     )
 
-    # Group selector
+    # Group selector — use on_change to reset source selection cleanly
     group_names = list(SOURCE_GROUPS.keys())
+
+    def _on_group_change():
+        st.session_state.source_group    = st.session_state._group_sel
+        st.session_state.source_selected = None
+        st.session_state.source_cache    = st.session_state.get("source_cache", {})
+
+    if st.session_state.source_group not in group_names:
+        st.session_state.source_group = group_names[0]
+
     selected_group = st.selectbox(
         "Publication group:", group_names,
-        index=group_names.index(st.session_state.source_group) if st.session_state.source_group in group_names else 0,
-        label_visibility="collapsed", key="group_selector"
+        index=group_names.index(st.session_state.source_group),
+        label_visibility="collapsed", key="_group_sel",
+        on_change=_on_group_change,
     )
-    if selected_group != st.session_state.source_group:
-        st.session_state.source_group = selected_group
-        st.session_state.source_selected = None
-        st.rerun()
 
     # Source selector within group
     sources_in_group = SOURCE_GROUPS.get(selected_group, [])
-    # Only show sources that are in SOURCE_DIRECTORY
     available = [s for s in sources_in_group if s in SOURCE_DIRECTORY]
 
     if not available:
         st.markdown('<div class="info-box">No sources available in this group.</div>', unsafe_allow_html=True)
     else:
-        # Default to first source in group if none selected or selection changed group
         if st.session_state.source_selected not in available:
             st.session_state.source_selected = available[0]
+
+        def _on_source_change():
+            st.session_state.source_selected = st.session_state._source_sel
 
         selected_source = st.selectbox(
             "Publication:", available,
             index=available.index(st.session_state.source_selected),
-            label_visibility="collapsed", key="source_selector"
+            label_visibility="collapsed", key="_source_sel",
+            on_change=_on_source_change,
         )
-        if selected_source != st.session_state.source_selected:
-            st.session_state.source_selected = selected_source
-            st.rerun()
+        selected_source = st.session_state.source_selected
 
         # Fetch / cache button
         col_src_info, col_src_btn = st.columns([3, 1])
@@ -1770,6 +2126,166 @@ with tab_sources:
     st.markdown(grid2, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
+# TAB — SCREENER (Underperformance vs TOPIX)
+# ════════════════════════════════════════════════════════════
+with tab_screener:
+    st.markdown('<div class="section-title">🔬 Performance Screener — TOPIX Top 200</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="info-box">Screen ~200 major TSE stocks for underperformance vs TOPIX over 3, 6 and 12 months. '
+        'Data via Yahoo Finance. Fetching all stocks takes ~60–90 seconds.</div>',
+        unsafe_allow_html=True
+    )
+
+    topix_ret   = st.session_state.get("topix_returns", {})
+    screen_data = st.session_state.get("screen_data", [])
+    screen_ts   = st.session_state.get("screen_last_fetch")
+
+    # Controls row
+    scr_col1, scr_col2, scr_col3 = st.columns([2, 2, 1])
+    with scr_col1:
+        scr_threshold = st.slider(
+            "Underperform threshold (%):", 0, 30, 10, 1, key="scr_threshold"
+        )
+    with scr_col2:
+        scr_period = st.radio(
+            "Flag period:", ["3M", "6M", "12M", "Any"],
+            horizontal=True, key="scr_period", label_visibility="collapsed"
+        )
+    with scr_col3:
+        st.markdown("<div style='margin-top:1.4rem'>", unsafe_allow_html=True)
+        fetch_screen = st.button("🔄 Run Screen", use_container_width=True, key="btn_run_screen")
+
+    if fetch_screen:
+        with st.spinner("Fetching performance data for ~200 stocks (~15–20s)..."):
+            if not topix_ret:
+                topix_ret = fetch_topix_returns()
+                st.session_state.topix_returns = topix_ret
+            screen_data = fetch_underperformance_screen(topix_returns=topix_ret, max_workers=25)
+            st.session_state.screen_data = screen_data
+            st.session_state.screen_last_fetch = now_local()
+        st.rerun()
+
+    if screen_ts:
+        st.markdown(
+            f'<div style="font-size:0.68rem;color:#9B8B7A;margin-bottom:0.4rem;">Last run: {screen_ts}</div>',
+            unsafe_allow_html=True
+        )
+
+    if not screen_data:
+        st.markdown(
+            '<div class="empty-state">Click <strong>🔄 Run Screen</strong> to fetch performance data.</div>',
+            unsafe_allow_html=True
+        )
+    else:
+        topix_3m  = topix_ret.get("3M")
+        topix_6m  = topix_ret.get("6M")
+        topix_12m = topix_ret.get("12M")
+
+        # Filter by underperformance
+        def _is_flagged(d):
+            t = -scr_threshold
+            if scr_period == "3M":
+                return d.get("under_3m") is not None and d["under_3m"] < t
+            elif scr_period == "6M":
+                return d.get("under_6m") is not None and d["under_6m"] < t
+            elif scr_period == "12M":
+                return d.get("under_12m") is not None and d["under_12m"] < t
+            else:  # Any
+                return (
+                    (d.get("under_3m")  is not None and d["under_3m"]  < t) or
+                    (d.get("under_6m")  is not None and d["under_6m"]  < t) or
+                    (d.get("under_12m") is not None and d["under_12m"] < t)
+                )
+
+        flagged   = [d for d in screen_data if _is_flagged(d)]
+        unflagged = [d for d in screen_data if not _is_flagged(d)]
+
+        # Summary stats
+        total_ok  = len([d for d in screen_data if d.get("price", 0) > 0])
+        st.markdown(
+            f'<div class="info-box">'
+            f'<strong>{len(flagged)}</strong> of {total_ok} stocks underperform TOPIX by >{scr_threshold}% '
+            f'over {scr_period} &nbsp;·&nbsp; '
+            f'TOPIX: 3M <strong>{f"{topix_3m:+.1f}%" if topix_3m else "N/A"}</strong> · '
+            f'6M <strong>{f"{topix_6m:+.1f}%" if topix_6m else "N/A"}</strong> · '
+            f'12M <strong>{f"{topix_12m:+.1f}%" if topix_12m else "N/A"}</strong>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        # Show toggle
+        show_all = st.checkbox("Show all stocks (not just flagged)", key="scr_show_all")
+        rows_to_show = screen_data if show_all else flagged
+
+        if not rows_to_show:
+            st.markdown(
+                '<div class="info-box">No stocks match the current filter. Try lowering the threshold or changing the period.</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            # Sort selector
+            sort_by = st.radio(
+                "Sort by:", ["12M underperformance", "6M underperformance", "3M underperformance", "Today % change"],
+                horizontal=True, key="scr_sort", label_visibility="collapsed"
+            )
+            sort_key_map = {
+                "12M underperformance": lambda d: d.get("under_12m") or 0,
+                "6M underperformance":  lambda d: d.get("under_6m")  or 0,
+                "3M underperformance":  lambda d: d.get("under_3m")  or 0,
+                "Today % change":       lambda d: d.get("pct_change") or 0,
+            }
+            rows_to_show = sorted(rows_to_show, key=sort_key_map[sort_by])
+
+            # Table header
+            header = (
+                '<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;'
+                'gap:0.3rem;padding:0.3rem 0.4rem;background:#1A1A1A;color:#F7F4EF;'
+                'font-size:0.62rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;'
+                'border-radius:3px 3px 0 0;margin-top:0.5rem;">'
+                '<div>Company</div><div style="text-align:right;">Price</div>'
+                '<div style="text-align:right;">Today</div>'
+                '<div style="text-align:right;">3M vs TOPIX</div>'
+                '<div style="text-align:right;">6M vs TOPIX</div>'
+                '<div style="text-align:right;">12M vs TOPIX</div>'
+                '</div>'
+            )
+            st.markdown(header, unsafe_allow_html=True)
+
+            def _cell(val, threshold):
+                if val is None:
+                    return '<div style="text-align:right;color:#9B8B7A;font-size:0.75rem;">N/A</div>'
+                color = "#C62828" if val < -threshold else ("#2E7D32" if val >= 0 else "#6B6B6B")
+                flag  = " ⚠" if val < -threshold else ""
+                return f'<div style="text-align:right;color:{color};font-weight:700;font-size:0.75rem;">{val:+.1f}%{flag}</div>'
+
+            rows_html = ""
+            for i, d in enumerate(rows_to_show):
+                bg = "#FAFAF8" if i % 2 == 0 else "#F7F4EF"
+                pct = d.get("pct_change", 0)
+                today_col = "#2E7D32" if pct >= 0 else "#C62828"
+                flagged_row = _is_flagged(d)
+                left_border = "border-left:3px solid #C62828;" if flagged_row else "border-left:3px solid transparent;"
+                rows_html += (
+                    f'<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr;'
+                    f'gap:0.3rem;padding:0.35rem 0.4rem;background:{bg};{left_border}'
+                    f'border-bottom:1px solid #EDE8E0;">'
+                    f'<div><span style="font-size:0.8rem;font-weight:600;">{d["name"]}</span>'
+                    f'&nbsp;<span style="font-size:0.62rem;color:#9B8B7A;">{d["code"]}</span></div>'
+                    f'<div style="text-align:right;font-size:0.78rem;">¥{d["price"]:,.0f}</div>'
+                    f'<div style="text-align:right;color:{today_col};font-weight:700;font-size:0.78rem;">{pct:+.2f}%</div>'
+                    + _cell(d.get("under_3m"), scr_threshold)
+                    + _cell(d.get("under_6m"), scr_threshold)
+                    + _cell(d.get("under_12m"), scr_threshold)
+                    + '</div>'
+                )
+            st.markdown(rows_html, unsafe_allow_html=True)
+            st.markdown(
+                f'<div style="font-size:0.65rem;color:#9B8B7A;margin-top:0.4rem;">'
+                f'Showing {len(rows_to_show)} stocks · ⚠ = underperforms TOPIX by >{scr_threshold}% · Data via Yahoo Finance</div>',
+                unsafe_allow_html=True
+            )
+
+# ════════════════════════════════════════════════════════════
 # TAB 6 — SUBSCRIBE
 # ════════════════════════════════════════════════════════════
 with tab_subscribe:
@@ -1786,6 +2302,39 @@ with tab_subscribe:
 
     st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)
 
+    # ── Scheduler setup instructions ──────────────────────────────────────────
+    with st.expander("⚙️ Set up automatic digest delivery", expanded=False):
+        app_url = st.text_input(
+            "Your Streamlit app URL:",
+            placeholder="https://your-app.streamlit.app",
+            key="app_url_input",
+        )
+        token = get_secret("DIGEST_WEBHOOK_TOKEN") or "(not set)"
+        tok_display = token if token == "(not set)" else token[:6] + "…"
+        st.markdown(f"""
+**How it works:** The app has a built-in webhook that sends the digest when pinged with a URL parameter.
+Add `DIGEST_WEBHOOK_TOKEN = "your-secret"` to Streamlit Secrets to protect it.
+
+**Step 1 — Add to Streamlit Secrets:**
+```
+DIGEST_WEBHOOK_TOKEN = "choose-a-secret-token"
+SENDGRID_API_KEY = "your-sendgrid-key"
+DIGEST_FROM_EMAIL = "digest@yourdomain.com"
+```
+
+**Step 2 — Set up cron-job.org (free):**
+
+Go to [cron-job.org](https://cron-job.org) → New cronjob:
+
+| Edition | URL | Schedule |
+|---|---|---|
+| Pre-market (07:00 JST) | `{app_url or 'https://your-app.streamlit.app'}/?digest=premarket&token=your-secret` | `0 22 * * 0-4` (UTC Sun–Thu) |
+| Close-of-day (19:00 JST) | `{app_url or 'https://your-app.streamlit.app'}/?digest=close&token=your-secret` | `0 10 * * 1-5` (UTC Mon–Fri) |
+
+Current webhook token: `{tok_display}`
+""", unsafe_allow_html=False)
+
+    st.markdown("<div style='height:0.4rem'></div>", unsafe_allow_html=True)
     col_tab1, col_tab2 = st.columns(2)
     with col_tab1:
         st.markdown('<div class="section-subtitle">Subscribe</div>', unsafe_allow_html=True)

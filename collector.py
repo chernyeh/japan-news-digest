@@ -18,9 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 RSS_SOURCES = [
     # English (no translation needed)
     # Japan Times blocks cloud IPs on their native feed — use Google News proxy
-    ("Japan Times",          "https://news.google.com/rss/search?q=site:japantimes.co.jp&hl=en&gl=JP&ceid=JP:en", "en"),
     ("Japan Times Business", "https://news.google.com/rss/search?q=site:japantimes.co.jp+business&hl=en&gl=JP&ceid=JP:en", "en"),
-    ("Japan Times Economy",  "https://news.google.com/rss/search?q=site:japantimes.co.jp+economy&hl=en&gl=JP&ceid=JP:en", "en"),
     # ── Nikkei Group feeds ──────────────────────────────────────────────────────
     # Nikkei Asia (English) — confirmed working
     ("Nikkei Asia",           "https://asia.nikkei.com/rss/feed/nar",                        "en"),
@@ -35,11 +33,9 @@ RSS_SOURCES = [
     # Reuters killed public RSS in 2020. Use Google News proxy — search for Reuters Japan coverage.
     ("Reuters Japan",        "https://news.google.com/rss/search?q=reuters+japan+economy+OR+business+OR+markets&hl=en&gl=JP&ceid=JP:en", "en"),
     ("NHK World Business",   "https://www3.nhk.or.jp/nhkworld/en/news/feeds/business.xml", "en"),
-    ("NHK World",            "https://www3.nhk.or.jp/nhkworld/en/news/feeds/top.xml",      "en"),
     ("Japan Industry News",  "https://japanindustrynews.com/feed/",                         "en"),
     # Japanese (translated)
     ("Asahi Shimbun",        "https://rss.asahi.com/rss/asahi/newsheadlines.rdf",           "ja"),
-    ("NHK",                  "https://www3.nhk.or.jp/rss/news/cat0.xml",                    "ja"),
     ("NHK Economics",        "https://www3.nhk.or.jp/rss/news/cat4.xml",                    "ja"),
     ("NHK Business",         "https://www3.nhk.or.jp/rss/news/cat5.xml",                    "ja"),
     ("Mainichi Shimbun",     "https://rss.mainichi.jp/rss/etc/mainichi-flash.xml",          "ja"),
@@ -440,7 +436,6 @@ def scrape_trade_paper(source_name: str, url: str, selectors: str, language: str
 # Maps display name → (url, language) for sources that have working RSS feeds
 SOURCE_DIRECTORY = {
     # English sources
-    "Japan Times":          ("https://news.google.com/rss/search?q=site:japantimes.co.jp&hl=en&gl=JP&ceid=JP:en", "en"),
     "Japan Times Business": ("https://news.google.com/rss/search?q=site:japantimes.co.jp+business&hl=en&gl=JP&ceid=JP:en", "en"),
     "Nikkei Asia":          ("https://asia.nikkei.com/rss/feed/nar",                                          "en"),
     "Nikkei Shimbun":       ("https://news.google.com/rss/search?q=site:nikkei.com&hl=ja&gl=JP&ceid=JP:ja", "ja"),
