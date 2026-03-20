@@ -342,6 +342,326 @@ def resolve_gnews_url(entry) -> str:
     return entry.get("link", "#")
 
 
+# ── Corporate Action Classifier ───────────────────────────────────────────────
+
+# Priority action types (shown more prominently in Signal Feed)
+PRIORITY_ACTIONS = {
+    "guidance_raise", "guidance_cut",
+    "m&a_target", "m&a_acquirer", "m&a_rumour",
+    "contract_win", "contract_loss",
+    "mgmt_change_negative",
+}
+
+# Full taxonomy with directional bias and display labels
+CORP_ACTION_META = {
+    "earnings_beat":        {"dir": "positive", "label": "Earnings Beat",         "emoji": "📈"},
+    "earnings_miss":        {"dir": "negative", "label": "Earnings Miss",         "emoji": "📉"},
+    "guidance_raise":       {"dir": "positive", "label": "Guidance Raised",       "emoji": "⬆️"},
+    "guidance_cut":         {"dir": "negative", "label": "Guidance Cut",          "emoji": "⬇️"},
+    "dividend_increase":    {"dir": "positive", "label": "Dividend Increase",     "emoji": "💰"},
+    "dividend_cut":         {"dir": "negative", "label": "Dividend Cut",          "emoji": "✂️"},
+    "buyback":              {"dir": "positive", "label": "Buyback",               "emoji": "🔁"},
+    "m&a_acquirer":         {"dir": "mixed",    "label": "M&A: Acquirer",         "emoji": "🤝"},
+    "m&a_target":           {"dir": "positive", "label": "M&A: Target",           "emoji": "🎯"},
+    "m&a_rumour":           {"dir": "mixed",    "label": "M&A: Rumour",           "emoji": "💬"},
+    "m&a_cancelled":        {"dir": "negative", "label": "M&A: Cancelled",        "emoji": "❌"},
+    "contract_win":         {"dir": "positive", "label": "Contract Win",          "emoji": "✅"},
+    "contract_loss":        {"dir": "negative", "label": "Contract Lost",         "emoji": "🚫"},
+    "regulatory_approval":  {"dir": "positive", "label": "Regulatory Approval",   "emoji": "✅"},
+    "regulatory_fine":      {"dir": "negative", "label": "Fine / Penalty",        "emoji": "⚖️"},
+    "regulatory_inquiry":   {"dir": "negative", "label": "Investigation",         "emoji": "🔍"},
+    "mgmt_change_neutral":  {"dir": "neutral",  "label": "Management Change",     "emoji": "👤"},
+    "mgmt_change_negative": {"dir": "negative", "label": "Mgmt Change (Trouble)", "emoji": "🚨"},
+    "capital_raise":        {"dir": "negative", "label": "Capital Raise",         "emoji": "📋"},
+    "asset_sale":           {"dir": "mixed",    "label": "Asset Sale",            "emoji": "🏷️"},
+    "restructuring":        {"dir": "mixed",    "label": "Restructuring",         "emoji": "🔧"},
+    "credit_upgrade":       {"dir": "positive", "label": "Credit Upgrade",        "emoji": "⭐"},
+    "credit_downgrade":     {"dir": "negative", "label": "Credit Downgrade",      "emoji": "⭐"},
+    "other_corporate":      {"dir": "neutral",  "label": "Corporate News",        "emoji": "📰"},
+    "none":                 {"dir": "neutral",  "label": "",                      "emoji": ""},
+}
+
+
+def classify_articles_batch(articles: list, api_key: str) -> list:
+    """
+    Classify up to 50 articles in a single Claude Haiku API call.
+    Adds corp_action, action_direction, company_code,
+    company_name_clean, signal_confidence to each article in-place.
+    Cost: ~$0.001-0.003 per batch of 50.
+    """
+    if not articles or not api_key:
+        return articles
+
+    import json
+
+    lines = []
+    for i, a in enumerate(articles, 1):
+        title = a.get("translated_title") or a.get("title") or a.get("original_title", "")
+        lines.append(f"{i}. {title}")
+    article_block = "\n".join(lines)
+
+    system = (
+        "You are a Japan equity analyst AI. Classify each news headline.\n\n"
+        "For each headline return a JSON object with:\n"
+        '- "id": the number (integer)\n'
+        '- "company_code": TSE 4-digit code if identifiable, else ""\n'
+        '- "company_name": canonical English company name if identifiable, else ""\n'
+        '- "action": one of: earnings_beat, earnings_miss, guidance_raise, guidance_cut, '
+        "dividend_increase, dividend_cut, buyback, m&a_acquirer, m&a_target, m&a_rumour, "
+        "m&a_cancelled, contract_win, contract_loss, regulatory_approval, regulatory_fine, "
+        "regulatory_inquiry, mgmt_change_neutral, mgmt_change_negative, capital_raise, "
+        "asset_sale, restructuring, credit_upgrade, credit_downgrade, other_corporate, none\n"
+        '- "direction": positive, negative, mixed, or neutral\n'
+        '- "confidence": high, medium, or low\n\n'
+        "Use mgmt_change_negative when a management change follows poor results, a scandal, "
+        "activist pressure, or strategic failure. Use mgmt_change_neutral for planned succession.\n\n"
+        "Return ONLY a JSON array, no other text."
+    )
+
+    prompt = f"Classify these {len(articles)} headlines:\n\n{article_block}"
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"Content-Type": "application/json"},
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 2000,
+                "system": system,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=35,
+        )
+        raw = resp.json()
+        text = raw.get("content", [{}])[0].get("text", "").strip()
+        # Strip markdown fences
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        text = text.strip()
+
+        results = json.loads(text)
+        result_map = {int(r["id"]): r for r in results}
+
+        for i, a in enumerate(articles, 1):
+            r = result_map.get(i, {})
+            action = r.get("action", "none")
+            if action not in CORP_ACTION_META:
+                action = "none"
+            a["corp_action"]        = action
+            a["action_direction"]   = r.get("direction", "neutral")
+            a["company_code"]       = r.get("company_code", "")
+            a["company_name_clean"] = r.get("company_name", "")
+            a["signal_confidence"]  = r.get("confidence", "low")
+            a["is_priority_signal"] = (
+                action in PRIORITY_ACTIONS
+                and a.get("signal_confidence") in ("high", "medium")
+            )
+
+    except Exception as e:
+        print(f"Classifier batch error: {e}")
+        for a in articles:
+            a.setdefault("corp_action", "none")
+            a.setdefault("action_direction", "neutral")
+            a.setdefault("company_code", "")
+            a.setdefault("company_name_clean", "")
+            a.setdefault("signal_confidence", "low")
+            a.setdefault("is_priority_signal", False)
+
+    return articles
+
+
+
+# ── Corporate action taxonomy ─────────────────────────────────────────────────
+
+CORP_ACTION_TYPES = {
+    # Earnings / financials
+    "earnings_beat":      {"label": "Earnings Beat",      "emoji": "📈", "direction": "positive", "priority": True},
+    "earnings_miss":      {"label": "Earnings Miss",      "emoji": "📉", "direction": "negative", "priority": True},
+    "guidance_raise":     {"label": "Guidance ▲",         "emoji": "🎯", "direction": "positive", "priority": True},
+    "guidance_cut":       {"label": "Guidance ▼",         "emoji": "⚠️", "direction": "negative", "priority": True},
+    "guidance_initiate":  {"label": "Guidance Issued",    "emoji": "📋", "direction": "neutral",  "priority": False},
+    # Capital / shareholder returns
+    "dividend_raise":     {"label": "Dividend ▲",         "emoji": "💰", "direction": "positive", "priority": True},
+    "dividend_cut":       {"label": "Dividend ▼",         "emoji": "✂️", "direction": "negative", "priority": True},
+    "dividend_special":   {"label": "Special Dividend",   "emoji": "💰", "direction": "positive", "priority": True},
+    "buyback":            {"label": "Buyback",            "emoji": "🔄", "direction": "positive", "priority": True},
+    "capital_raise":      {"label": "Capital Raise",      "emoji": "🏦", "direction": "negative", "priority": True},
+    "rights_issue":       {"label": "Rights Issue",       "emoji": "📄", "direction": "negative", "priority": True},
+    # M&A / corporate structure
+    "ma_acquirer":        {"label": "M&A: Acquirer",      "emoji": "🤝", "direction": "mixed",    "priority": True},
+    "ma_target":          {"label": "M&A: Target",        "emoji": "🎯", "direction": "positive", "priority": True},
+    "ma_rumour":          {"label": "M&A Rumour",         "emoji": "👂", "direction": "mixed",    "priority": True},
+    "ma_blocked":         {"label": "M&A Blocked",        "emoji": "🚫", "direction": "negative", "priority": True},
+    "spinoff":            {"label": "Spinoff/Divestiture","emoji": "✂️", "direction": "mixed",    "priority": False},
+    "jv_partnership":     {"label": "JV/Partnership",     "emoji": "🤝", "direction": "positive", "priority": False},
+    # Management
+    "mgmt_change_ceo":    {"label": "CEO Change",         "emoji": "👔", "direction": "mixed",    "priority": True},
+    "mgmt_change_other":  {"label": "Mgmt Change",        "emoji": "👤", "direction": "mixed",    "priority": False},
+    # Regulatory / legal
+    "regulatory_approval":{"label": "Reg Approval",      "emoji": "✅", "direction": "positive", "priority": False},
+    "regulatory_fine":    {"label": "Fine/Penalty",       "emoji": "⚖️", "direction": "negative", "priority": True},
+    "investigation":      {"label": "Investigation",      "emoji": "🔍", "direction": "negative", "priority": True},
+    "lawsuit":            {"label": "Lawsuit",            "emoji": "⚖️", "direction": "negative", "priority": False},
+    # Operations
+    "contract_win":       {"label": "Contract Win",       "emoji": "✅", "direction": "positive", "priority": False},
+    "contract_loss":      {"label": "Contract Loss",      "emoji": "❌", "direction": "negative", "priority": False},
+    "credit_upgrade":     {"label": "Credit Upgrade",     "emoji": "⬆️", "direction": "positive", "priority": False},
+    "credit_downgrade":   {"label": "Credit Downgrade",   "emoji": "⬇️", "direction": "negative", "priority": True},
+    "recall":             {"label": "Recall",             "emoji": "⚠️", "direction": "negative", "priority": True},
+    "bankruptcy":         {"label": "Bankruptcy",         "emoji": "💥", "direction": "negative", "priority": True},
+    # Default
+    "none":               {"label": "",                   "emoji": "",   "direction": "neutral",  "priority": False},
+}
+
+# Priority types (shown prominently in Signal Feed)
+PRIORITY_ACTION_TYPES = {k for k, v in CORP_ACTION_TYPES.items() if v["priority"]}
+
+
+# Aliases for app.py compatibility
+CORP_ACTION_META   = CORP_ACTION_TYPES
+PRIORITY_ACTIONS   = PRIORITY_ACTION_TYPES
+# Direction sort order for Signal Feed (positive first)
+DIRECTION_ORDER = {"positive": 0, "mixed": 1, "neutral": 2, "negative": 3}
+
+
+def classify_articles_batch(articles: list, api_key: str) -> None:
+    """
+    Classify a list of articles for corporate action type, direction, and company.
+    Modifies articles in-place. Single Claude Haiku call for the whole batch.
+    Returns nothing — results written directly to article dicts.
+    """
+    if not articles or not api_key:
+        return
+
+    import json as _json
+    import requests as _req
+
+    # Build the prompt
+    lines = []
+    for i, a in enumerate(articles):
+        title = a.get("translated_title") or a.get("title", "")
+        orig  = a.get("original_title", "")
+        src   = a.get("source", "")
+        combo = title if not orig or orig == title else f"{title} [{orig}]"
+        lines.append(f"{i}: [{src}] {combo}")
+
+    article_block = "\n".join(lines)
+
+    action_types_str = ", ".join(sorted(
+        k for k in CORP_ACTION_TYPES if k != "none"
+    ))
+
+    prompt = f"""You are a Japan equity analyst. Classify each news headline for corporate action signals.
+
+For EACH headline, return a JSON object with:
+- "idx": the index number (integer)
+- "corp_action": one of [{action_types_str}, none]
+- "direction": one of [positive, negative, neutral, mixed]
+- "company_code": TSE 4-digit code if identifiable (e.g. "7203"), else ""
+- "company_name": canonical English company name if identifiable, else ""
+- "confidence": one of [high, medium, low]
+
+Rules:
+- "none" = no specific corporate action, just general news
+- Use "mixed" for M&A acquirer (may overpay), restructuring (short pain / long gain)
+- Extract TSE code from article content or known companies (Toyota=7203, Sony=6758, SoftBank=9984, Nintendo=7974, Honda=7267, Keyence=6861, Tokyo Electron=8035, NTT=9432, KDDI=9433, Recruit=6098, Hitachi=6501, Fanuc=6954, Daikin=6367, Mitsubishi UFJ=8306, Sumitomo Mitsui=8316, Mizuho=8411, Fast Retailing=9983, etc.)
+- high confidence = headline explicitly states the action; medium = implied; low = uncertain
+
+Return ONLY a JSON array, no markdown, no explanation:
+[{{"idx":0,"corp_action":"...","direction":"...","company_code":"...","company_name":"...","confidence":"..."}}]
+
+Headlines:
+{article_block}"""
+
+    try:
+        resp = _req.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"},
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 4000,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            timeout=45,
+        )
+        raw = resp.json()["content"][0]["text"].strip()
+
+        # Strip any accidental markdown fences
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+
+        results = _json.loads(raw)
+        result_map = {r["idx"]: r for r in results}
+
+        for i, a in enumerate(articles):
+            r = result_map.get(i, {})
+            ca  = r.get("corp_action", "none") or "none"
+            if ca not in CORP_ACTION_TYPES:
+                ca = "none"
+            a["corp_action"]       = ca
+            a["action_direction"]  = r.get("direction", "neutral") or "neutral"
+            a["company_code"]      = r.get("company_code", "") or ""
+            a["company_name_clean"]= r.get("company_name", "") or ""
+            a["signal_confidence"] = r.get("confidence", "low") or "low"
+            a["is_priority_signal"]= ca in PRIORITY_ACTION_TYPES and a["signal_confidence"] != "low"
+
+    except Exception as e:
+        print(f"Classifier error: {e}")
+        # Safe defaults on failure
+        for a in articles:
+            a.setdefault("corp_action", "none")
+            a.setdefault("action_direction", "neutral")
+            a.setdefault("company_code", "")
+            a.setdefault("company_name_clean", "")
+            a.setdefault("signal_confidence", "low")
+            a.setdefault("is_priority_signal", False)
+
+
+def run_classifier_on_fetch(unique: list, api_key: str, max_articles: int = 50) -> list:
+    """
+    Run classifier on the top 50 micro articles from a fetch.
+    Only classifies articles not already classified.
+    """
+    if not api_key:
+        # Set safe defaults so UI doesn't crash
+        for a in unique:
+            a.setdefault("corp_action", "none")
+            a.setdefault("action_direction", "neutral")
+            a.setdefault("company_code", "")
+            a.setdefault("company_name_clean", "")
+            a.setdefault("signal_confidence", "low")
+            a.setdefault("is_priority_signal", False)
+        return unique
+
+    candidates = [
+        a for a in unique
+        if a.get("news_type") == "micro"
+        and not a.get("corp_action")
+    ]
+    candidates.sort(key=lambda a: a.get("pub_dt") or datetime.min, reverse=True)
+    to_classify = candidates[:max_articles]
+
+    if to_classify:
+        print(f"Classifying {len(to_classify)} micro articles...")
+        classify_articles_batch(to_classify, api_key)
+
+    # Defaults for unclassified articles
+    for a in unique:
+        a.setdefault("corp_action", "none")
+        a.setdefault("action_direction", "neutral")
+        a.setdefault("company_code", "")
+        a.setdefault("company_name_clean", "")
+        a.setdefault("signal_confidence", "low")
+        a.setdefault("is_priority_signal", False)
+
+    return unique
+
+
 def fetch_rss(source_name: str, url: str, language: str) -> list:
     articles = []
     try:
@@ -631,13 +951,24 @@ def _fetch_all_news_inner() -> dict:
             seen_urls.add(url)
             unique.append(a)
 
-    # Classify
+    # Classify sector + news_type
     for a in unique:
         title_en = a.get("translated_title") or a.get("title", "")
         title_orig = a.get("original_title", "")
         source = a.get("source", "")
         a["sector"] = classify_sector(title_en, title_orig)
         a["news_type"] = classify_news_type(title_en, title_orig, source)
+
+    # Corporate action classification (AI, top 50 micro articles)
+    try:
+        import os as _os
+        import streamlit as _st
+        _api_key = _st.secrets.get("ANTHROPIC_API_KEY", "") if hasattr(_st, "secrets") else ""
+        if not _api_key:
+            _api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        _api_key = _os.environ.get("ANTHROPIC_API_KEY", "") if "_os" in dir() else ""
+    run_classifier_on_fetch(unique, _api_key, max_articles=50)
 
 
     # Group by MSCI sector

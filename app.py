@@ -1,7 +1,9 @@
 import streamlit as st
 from datetime import datetime
 import pytz
-from collector import fetch_all_news, fetch_source_headlines, SOURCE_DIRECTORY, SOURCE_GROUPS
+from collector import (fetch_all_news, fetch_source_headlines,
+                        SOURCE_DIRECTORY, SOURCE_GROUPS,
+                        CORP_ACTION_META, PRIORITY_ACTIONS, DIRECTION_ORDER)
 from emailer import subscribe_email, send_digest, get_secret
 from market_data import (fetch_market_overview, fetch_tse_movers, fetch_foreign_flow,
                           fetch_jpx_daily_movers, fetch_topix_returns,
@@ -233,6 +235,51 @@ html, body, [class*="css"] {
     text-transform: uppercase; padding: 0.07rem 0.32rem;
     border-radius: 2px; margin-left: 0.32rem; vertical-align: middle;
 }
+.signal-positive {
+    display: inline-block; background: #1B5E20; color: #C8E6C9;
+    font-size: 0.58rem; font-weight: 700; padding: 0.1rem 0.4rem;
+    border-radius: 3px; margin-right: 0.3rem; vertical-align: middle;
+    letter-spacing: 0.04em;
+}
+.signal-negative {
+    display: inline-block; background: #B71C1C; color: #FFCDD2;
+    font-size: 0.58rem; font-weight: 700; padding: 0.1rem 0.4rem;
+    border-radius: 3px; margin-right: 0.3rem; vertical-align: middle;
+    letter-spacing: 0.04em;
+}
+.signal-mixed {
+    display: inline-block; background: #E65100; color: #FFE0B2;
+    font-size: 0.58rem; font-weight: 700; padding: 0.1rem 0.4rem;
+    border-radius: 3px; margin-right: 0.3rem; vertical-align: middle;
+    letter-spacing: 0.04em;
+}
+.signal-neutral {
+    display: inline-block; background: #37474F; color: #CFD8DC;
+    font-size: 0.58rem; font-weight: 700; padding: 0.1rem 0.4rem;
+    border-radius: 3px; margin-right: 0.3rem; vertical-align: middle;
+    letter-spacing: 0.04em;
+}
+.signal-priority {
+    display: inline-block; background: #F9A825; color: #1A1A1A;
+    font-size: 0.55rem; font-weight: 900; padding: 0.08rem 0.3rem;
+    border-radius: 2px; margin-right: 0.2rem; vertical-align: middle;
+    letter-spacing: 0.06em; text-transform: uppercase;
+}
+.signal-company {
+    display: inline-block; background: #E8F4F8; color: #0D47A1;
+    font-size: 0.6rem; font-weight: 700; padding: 0.06rem 0.32rem;
+    border-radius: 2px; margin-right: 0.25rem; vertical-align: middle;
+}
+.signal-card {
+    border-left: 4px solid #D9D3C8;
+    padding: 0.55rem 0.6rem 0.45rem;
+    margin-bottom: 0.4rem;
+    background: #FDFCFB;
+    border-radius: 0 3px 3px 0;
+}
+.signal-card.pos { border-left-color: #2E7D32; }
+.signal-card.neg { border-left-color: #C62828; }
+.signal-card.mix { border-left-color: #E65100; }
 .sector-header {
     font-family: 'Playfair Display', serif; font-size: 1.3rem; font-weight: 700;
     color: #1A1A1A; border-bottom: 2px solid #1A1A1A;
@@ -829,10 +876,12 @@ if _digest_trigger in ("premarket", "close"):
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 (tab_market, tab_bytime, tab_breaking, tab_news, tab_bysource,
- tab_sources, tab_filings, tab_sentiment, tab_watchlist, tab_screener, tab_subscribe) = st.tabs([
+ tab_sources, tab_filings, tab_sentiment, tab_watchlist, tab_screener,
+ tab_signals, tab_subscribe) = st.tabs([
     "📊 Markets", "🕐 By Time", "⚡ Breaking News", "📰 By Industry",
     "📁 By Source", "🔗 Sources", "📋 Co Filings",
-    "🌡️ Sentiment", "⭐ Watchlist", "🔬 Screener", "📬 Subscribe",
+    "🌡️ Sentiment", "⭐ Watchlist", "🔬 Screener",
+    "🚦 Signals", "📬 Subscribe",
 ])
 
 # ════════════════════════════════════════════════════════════
@@ -1578,10 +1627,20 @@ with tab_watchlist:
                 source = a.get("source","")
                 date   = a.get("pub_date","")
                 date_p = '<div class="article-meta">' + date + '</div>' if date else ""
+                _ca      = a.get("corp_action", "none")
+                _ca_meta = CORP_ACTION_META.get(_ca, CORP_ACTION_META["none"])
+                _ca_dirn = a.get("action_direction", "neutral")
+                _sig_cls = f"signal-{_ca_dirn}" if _ca_dirn in ("positive","negative","mixed","neutral") else "signal-neutral"
+                _ca_badge = (
+                    f'<span class="{_sig_cls}" style="font-size:0.52rem;padding:0.05rem 0.25rem;">'
+                    f'{_ca_meta.get("emoji","")} {_ca_meta.get("label","")}</span> '
+                ) if _ca_meta.get("label") else ""
+                _co_code = a.get("company_code","")
+                _co_badge = f'<span class="signal-company" style="font-size:0.55rem;">{_co_code}</span> ' if _co_code else ""
                 html += (
                     '<div class="watchlist-hit">'
                     '<div style="font-size:0.62rem;font-weight:700;color:#F9A825;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.15rem;">' + source + '</div>'
-                    '<div><a href="' + url + '" target="_blank" style="font-size:0.88rem;font-weight:600;color:#1A1A1A;text-decoration:none;">' + title + '</a></div>'
+                    '<div>' + _ca_badge + _co_badge + '<a href="' + url + '" target="_blank" style="font-size:0.88rem;font-weight:600;color:#1A1A1A;text-decoration:none;">' + title + '</a></div>'
                     + date_p + '</div>'
                 )
             st.markdown(html, unsafe_allow_html=True)
@@ -2284,6 +2343,170 @@ with tab_screener:
                 f'Showing {len(rows_to_show)} stocks · ⚠ = underperforms TOPIX by >{scr_threshold}% · Data via Yahoo Finance</div>',
                 unsafe_allow_html=True
             )
+
+
+# ════════════════════════════════════════════════════════════
+# TAB — SIGNAL FEED (Corporate Action Signals)
+# ════════════════════════════════════════════════════════════
+with tab_signals:
+    st.markdown('<div class="section-title">🚦 Corporate Action Signal Feed</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="info-box">AI-classified corporate action signals from the latest news fetch. '
+        'Positive signals first. Only articles where Claude identified a specific corporate action '
+        'with medium or high confidence are shown. Fetch news first to populate.</div>',
+        unsafe_allow_html=True
+    )
+
+    # Collect all classified articles
+    _all_sig = []
+    _seen_sig = set()
+    for _sec_arts in st.session_state.get("articles", {}).values():
+        for _a in _sec_arts:
+            _url = _a.get("url", "")
+            if _url and _url not in _seen_sig and _a.get("corp_action", "none") != "none":
+                _seen_sig.add(_url)
+                _all_sig.append(_a)
+    # Also check source_map
+    for _src_arts in st.session_state.get("source_map", {}).values():
+        for _a in _src_arts:
+            _url = _a.get("url", "")
+            if _url and _url not in _seen_sig and _a.get("corp_action", "none") != "none":
+                _seen_sig.add(_url)
+                _all_sig.append(_a)
+
+    if not _all_sig:
+        st.markdown(
+            '<div class="empty-state">No signals yet — click <strong>🔄 News</strong> to fetch '
+            'and classify articles. Signals appear after the first fetch with ANTHROPIC_API_KEY set.</div>',
+            unsafe_allow_html=True
+        )
+    else:
+        # ── Filters ──────────────────────────────────────────────────────────
+        _sig_col1, _sig_col2, _sig_col3 = st.columns([2, 2, 2])
+        with _sig_col1:
+            _dir_filter = st.multiselect(
+                "Direction:", ["positive", "negative", "mixed", "neutral"],
+                default=["positive", "negative", "mixed"],
+                key="sig_dir_filter", label_visibility="collapsed",
+                placeholder="Filter by direction..."
+            )
+        with _sig_col2:
+            _action_opts = sorted({
+                a.get("corp_action", "none")
+                for a in _all_sig
+                if a.get("corp_action", "none") != "none"
+            })
+            _action_labels = {
+                k: f"{CORP_ACTION_META.get(k, {}).get('emoji', '')} {CORP_ACTION_META.get(k, {}).get('label', k)}"
+                for k in _action_opts
+            }
+            _act_filter = st.multiselect(
+                "Action type:", options=_action_opts,
+                format_func=lambda k: _action_labels.get(k, k),
+                key="sig_act_filter", label_visibility="collapsed",
+                placeholder="Filter by action type..."
+            )
+        with _sig_col3:
+            _conf_filter = st.radio(
+                "Confidence:", ["All", "High + Medium", "High only"],
+                horizontal=True, key="sig_conf_filter", label_visibility="collapsed"
+            )
+
+        # ── Apply filters ─────────────────────────────────────────────────────
+        _filtered = _all_sig
+        if _dir_filter:
+            _filtered = [a for a in _filtered if a.get("action_direction", "neutral") in _dir_filter]
+        if _act_filter:
+            _filtered = [a for a in _filtered if a.get("corp_action") in _act_filter]
+        if _conf_filter == "High + Medium":
+            _filtered = [a for a in _filtered if a.get("signal_confidence") in ("high", "medium")]
+        elif _conf_filter == "High only":
+            _filtered = [a for a in _filtered if a.get("signal_confidence") == "high"]
+
+        # ── Sort: positive first, then mixed, then negative, then neutral;
+        #         within each group newest first ────────────────────────────
+        _dir_order = {"positive": 0, "mixed": 1, "negative": 2, "neutral": 3}
+        _priority_first = sorted(
+            _filtered,
+            key=lambda a: (
+                0 if a.get("is_priority_signal") else 1,
+                _dir_order.get(a.get("action_direction", "neutral"), 3),
+                -(a.get("pub_dt") or datetime.min).timestamp() if a.get("pub_dt") else 0
+            )
+        )
+
+        # Summary line
+        _pos = sum(1 for a in _filtered if a.get("action_direction") == "positive")
+        _neg = sum(1 for a in _filtered if a.get("action_direction") == "negative")
+        _mix = sum(1 for a in _filtered if a.get("action_direction") == "mixed")
+        st.markdown(
+            f'<div style="font-size:0.72rem;color:#6B6B6B;margin:0.3rem 0 0.6rem;">'
+            f'<strong>{len(_filtered)}</strong> signals · '
+            f'<span style="color:#2E7D32;font-weight:700;">{_pos} positive</span> · '
+            f'<span style="color:#C62828;font-weight:700;">{_neg} negative</span> · '
+            f'<span style="color:#E65100;font-weight:700;">{_mix} mixed</span>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        if not _priority_first:
+            st.markdown(
+                '<div class="info-box">No signals match the current filters.</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            def _signal_card(a):
+                action   = a.get("corp_action", "none")
+                meta     = CORP_ACTION_META.get(action, CORP_ACTION_META["none"])
+                dirn     = a.get("action_direction", "neutral")
+                conf     = a.get("signal_confidence", "low")
+                title    = a.get("translated_title") or a.get("title") or a.get("original_title", "")
+                url      = a.get("url", "#")
+                source   = a.get("source", "")
+                pub      = a.get("pub_date", "")
+                co_code  = a.get("company_code", "")
+                co_name  = a.get("company_name_clean", "")
+                is_prio  = a.get("is_priority_signal", False)
+                is_jp    = a.get("language", "en") == "ja"
+                orig     = a.get("original_title", "")
+
+                # Direction class for border
+                dir_class = {"positive": "pos", "negative": "neg", "mixed": "mix"}.get(dirn, "")
+                # Signal badge class
+                sig_class = f"signal-{dirn}" if dirn in ("positive","negative","mixed","neutral") else "signal-neutral"
+
+                prio_badge = '<span class="signal-priority">★ Priority</span>' if is_prio else ""
+                action_badge = (
+                    f'<span class="{sig_class}">'
+                    f'{meta.get("emoji","")} {meta.get("label","")}'
+                    f'</span>'
+                ) if meta.get("label") else ""
+                co_badge = (
+                    f'<span class="signal-company">{co_code} {co_name}</span>'
+                ) if co_code or co_name else ""
+                conf_dot = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(conf, "")
+                orig_part = (
+                    f'<div style="font-size:0.68rem;color:#9B8B7A;margin-top:0.1rem;">{orig}</div>'
+                ) if is_jp and orig and orig != title else ""
+
+                return (
+                    f'<div class="signal-card {dir_class}">'
+                    f'<div style="margin-bottom:0.18rem;">'
+                    f'{prio_badge}{action_badge}{co_badge}'
+                    f'<span style="font-size:0.6rem;color:#9B8B7A;">{conf_dot} {conf} confidence</span>'
+                    f'</div>'
+                    f'<div style="font-size:0.87rem;font-weight:600;line-height:1.35;">'
+                    f'<a href="{url}" target="_blank" style="color:#1A1A1A;text-decoration:none;">{title}</a>'
+                    f'</div>'
+                    f'{orig_part}'
+                    f'<div style="font-size:0.63rem;color:#9B8B7A;margin-top:0.18rem;">'
+                    f'{source}{(" · " + pub) if pub else ""}'
+                    f'</div>'
+                    f'</div>'
+                )
+
+            html_out = "".join(_signal_card(a) for a in _priority_first)
+            st.markdown(html_out, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
 # TAB 6 — SUBSCRIBE
