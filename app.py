@@ -489,7 +489,16 @@ if "_cache_loaded" not in st.session_state:
         st.session_state.filings_last_fetch  = _c["filings_last_fetch"]
     for _sk, _sv in _c.get("ai_summaries", {}).items():
         if _sk not in st.session_state:
+            # Discard old-format briefings that used [LINK](url) instead of [N] citations
+            if isinstance(_sv, str) and "](" in _sv and "[LINK]" in _sv.upper():
+                continue  # force regeneration
             st.session_state[_sk] = _sv
+    # Also restore _idx lookups for citation rendering
+    for _sk in list(st.session_state.keys()):
+        if _sk.endswith("_idx") and _sk not in st.session_state:
+            _cached_idx = _c.get("ai_summaries", {}).get(_sk)
+            if _cached_idx:
+                st.session_state[_sk] = _cached_idx
     st.session_state._cache_loaded = True
 
 
@@ -510,8 +519,8 @@ def _summary_to_html(text: str, art_index: dict = None) -> str:
         # Convert **bold** → <strong>
         line = _re2.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", line)
 
-        # Resolve [N] index citations → source pill buttons (must run BEFORE markdown link regex)
-        if art_index:
+        # [N] resolver disabled — source pills now appended via keyword matching
+        if False and art_index:
             def _resolve_idx(m):
                 try:
                     idx = int(m.group(1))
@@ -559,7 +568,29 @@ def _summary_to_html(text: str, art_index: dict = None) -> str:
                 out.append("</div>"); in_intro = False
             if not in_ul:
                 out.append("<ul>"); in_ul = True
-            out.append(f"<li>{line[2:]}</li>")
+            bullet_text = line[2:]
+            # Auto-append source pill by keyword matching against art_index
+            if art_index:
+                best_idx, best_score = None, 0
+                bullet_lower = bullet_text.lower()
+                for _ai, _ad in art_index.items():
+                    if not _ad.get("url"):
+                        continue
+                    _title = (_ad.get("title_for_match") or "").lower()
+                    _title_words = [w for w in _re2.sub(r"[^a-z0-9 ]", "", _title).split() if len(w) > 3]
+                    score = sum(1 for w in _title_words if w in bullet_lower)
+                    if score > best_score:
+                        best_score = score
+                        best_idx = _ai
+                if best_idx and best_score >= 1:
+                    _src = art_index[best_idx].get("source", "")
+                    _u   = art_index[best_idx].get("url", "")
+                    _disp = _src if len(_src) <= 40 else _src[:38] + "…"
+                    if _src and _u and _u.startswith("http"):
+                        bullet_text += f' <a class="summary-link" href="{_u}" target="_blank">{_disp}</a>'
+                    elif _src:
+                        bullet_text += f' <span class="summary-source-text">{_disp}</span>'
+            out.append(f"<li>{bullet_text}</li>")
 
         elif line.strip() == "":
             if in_ul:
@@ -641,7 +672,7 @@ ANTHROPIC_API_KEY = "sk-ant-..."
                     url    = a.get("url","")
                     source = a.get("source","")
                     pub    = a.get("pub_date","")
-                    _art_index[i] = {"source": source, "url": url}
+                    _art_index[i] = {"source": source, "url": url, "title_for_match": title}
                     lines.append(f"{i}. [{source}] {title} ({pub})")
                 article_text = "\n".join(lines)
 
@@ -662,7 +693,7 @@ Structure:
 Format rules:
 - ## headers for each cluster
 - Each bullet: 2-4 sentences. Lead with the key fact, then add context/comparison (e.g. "vs prior quarter", "first time since...", "X-year high/low"), then state the investment implication or risk
-- Reference articles by their index number in square brackets, e.g. [3] or [7][12] — use these ONLY as citation markers, placed at the END of the bullet after the period
+- Write clean prose only — do NOT include any links, URLs, brackets, or citation markers of any kind
 - Cover every meaningful story — do not skip or truncate
 - No preamble, no filler, no generic observations
 
@@ -684,6 +715,7 @@ Respond only with the briefing."""
                         # Persist AI summary to shared cache
                         _get_app_cache()["ai_summaries"][session_key] = msg.content[0].text
                         _get_app_cache()["ai_summaries"][session_key + "_ts"] = st.session_state[session_key + "_ts"]
+                        _get_app_cache()["ai_summaries"][session_key + "_idx"] = _art_index
                     except Exception as e:
                         st.error(f"AI summary error: {e}")
 
@@ -1591,7 +1623,7 @@ Write a COMPLETE investment-focused daily market wrap:
 Format rules:
 - ## headers for each section
 - Each bullet 2-3 sentences: key fact → context/comparison → investment implication
-- Cite news sources by index number in brackets at end of bullet, e.g. [3] or [7][12]
+- Write clean prose only — do NOT include any links, URLs, brackets, or citation markers
 - Be direct and analytical — no padding
 - COMPLETE the entire wrap, never truncate
 
