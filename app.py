@@ -404,6 +404,12 @@ html, body, [class*="css"] {
     vertical-align: middle; line-height: 1.6;
 }
 .ai-summary a.summary-link:hover { background: #5C2E00; }
+.summary-source-text {
+    display: inline-block; background: #6B6B6B; color: white;
+    font-size: 0.62rem; font-weight: 700; letter-spacing: 0.07em;
+    text-transform: uppercase; padding: 0.1rem 0.45rem;
+    border-radius: 3px; margin-left: 0.3rem; vertical-align: middle;
+}
 .ai-summary p { margin: 0.5rem 0; font-size: 1.0rem; line-height: 1.8; }
 .ai-summary .intro-block {
     background: #F5F0EA; border-radius: 3px; padding: 0.6rem 0.9rem;
@@ -488,8 +494,10 @@ if "_cache_loaded" not in st.session_state:
 
 
 # ── AI Summary helper ─────────────────────────────────────────────────────────
-def _summary_to_html(text: str) -> str:
-    """Convert AI summary markdown to styled HTML."""
+def _summary_to_html(text: str, art_index: dict = None) -> str:
+    """Convert AI summary markdown to styled HTML.
+    art_index: optional dict of {int: {source, url}} for resolving [N] citations.
+    """
     import re as _re2, html as _html2
     lines  = text.split("\n")
     out    = []
@@ -502,13 +510,31 @@ def _summary_to_html(text: str) -> str:
         # Convert **bold** → <strong>
         line = _re2.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", line)
 
-        # Convert [Source Name](url) → source-labelled button
+        # Resolve [N] index citations → source pill buttons (must run BEFORE markdown link regex)
+        if art_index:
+            def _resolve_idx(m):
+                try:
+                    idx = int(m.group(1))
+                    info = art_index.get(idx, {})
+                    _src = info.get("source", "")
+                    _u   = info.get("url", "")
+                    if _src and _u and _u.startswith("http") and len(_u) > 12:
+                        _display = _src if len(_src) <= 40 else _src[:38] + "…"
+                        return f'<a class="summary-link" href="{_u}" target="_blank">{_display}</a>'
+                    elif _src:
+                        return f'<span class="summary-source-text">{_src}</span>'
+                except (ValueError, AttributeError):
+                    pass
+                return m.group(0)  # leave unchanged if can't resolve
+            # Match [N] or [N][M] patterns — only pure integers inside brackets
+            line = _re2.sub(r"\[(\d+)\]", _resolve_idx, line)
+
+        # Convert [Source Name](url) → source-labelled button (legacy format)
         def _make_link(m):
             _label = m.group(1).strip()
             _u     = m.group(2).strip()
             if not _u or not _u.startswith("http") or len(_u) < 12:
                 return _label
-            # Truncate very long labels (e.g. full article titles used as link text)
             _display = _label if len(_label) <= 40 else _label[:38] + "…"
             return f'<a class="summary-link" href="{_u}" target="_blank">{_display}</a>'
         line = _re2.sub(r"\[([^\]]+)\]\(([^)]+)\)", _make_link, line)
@@ -607,40 +633,40 @@ ANTHROPIC_API_KEY = "sk-ant-..."
             else:
                 # Build article list for the prompt (newest first, capped)
                 subset = articles[:max_articles]
+                # Build index lookup: article number → {source, url}
+                _art_index = {}
                 lines = []
                 for i, a in enumerate(subset, 1):
                     title  = a.get("title") or a.get("translated_title") or a.get("original_title","")
                     url    = a.get("url","")
                     source = a.get("source","")
                     pub    = a.get("pub_date","")
-                    lines.append(f"{i}. source={source} | {title} | {pub} | {url}")
+                    _art_index[i] = {"source": source, "url": url}
+                    lines.append(f"{i}. [{source}] {title} ({pub})")
                 article_text = "\n".join(lines)
 
-                prompt = f"""You are an analyst helping a Malaysian investor track Japan business and investment news.
+                prompt = f"""You are an investment analyst helping a Malaysian fundamental investor monitor Japan equities and macroeconomics.
 
 Here are {len(subset)} headlines from {context}:
 
 {article_text}
 
-Write a COMPLETE structured briefing that covers ALL significant stories above. Do not cut off or truncate — every meaningful story should appear somewhere in the briefing.
+Write a COMPLETE, INVESTMENT-FOCUSED briefing. For each story, go beyond the headline — provide context, historical levels where relevant (e.g. previous interest rate levels, prior guidance figures, historical precedent), and flag whether this is part of a trend or a one-off event. Highlight actionable implications for stock or sector positioning.
 
 Structure:
-1. Opens with 2-3 sentences on the overall mood/theme
-2. Groups ALL stories into thematic clusters — use as many clusters as needed to cover everything (e.g. "BOJ & Macro", "Corporate Earnings", "M&A / Restructuring", "Yen & FX", "Sector Moves", "Politics & Policy", "Technology", "Energy" etc.)
-3. Under each cluster: bullet points for every notable development, each ending with a source link in this exact format: [Publication Name](url)
-4. Closes with 2-3 sentences on key things to watch
+1. Opening paragraph (3-4 sentences): overall market tone, dominant themes, and top investment implication
+2. Thematic clusters with ## headers — group stories logically (e.g. "BOJ & Rates", "Corporate Earnings", "M&A", "Yen & FX", "Energy & Commodities", "Sector Moves", "Geopolitics")
+3. Under each cluster: bullet points covering every significant story
+4. Closing ## What to Watch section: 3-5 forward-looking points with specific catalysts to monitor
 
 Format rules:
-- Use markdown ## headers for each cluster
-- One tight sentence per bullet (max 20 words) + source link — be concise, not verbose
-- CRITICAL: Links must use the ACTUAL publication name from the article list, e.g. [Nikkei Asia](url), [Reuters](url), [Bloomberg Japan](url) — NEVER write [Link] or [Source]
-- Use ONE link per bullet maximum — pick the single most relevant source
-- If multiple articles support a point, link the most relevant one
-- Cover every meaningful story — do not skip or truncate mid-briefing
-- Do not reproduce article titles verbatim; synthesise them
-- No preamble, no padding, no filler sentences
+- ## headers for each cluster
+- Each bullet: 2-4 sentences. Lead with the key fact, then add context/comparison (e.g. "vs prior quarter", "first time since...", "X-year high/low"), then state the investment implication or risk
+- Reference articles by their index number in square brackets, e.g. [3] or [7][12] — use these ONLY as citation markers, placed at the END of the bullet after the period
+- Cover every meaningful story — do not skip or truncate
+- No preamble, no filler, no generic observations
 
-IMPORTANT: You must complete the entire briefing including the closing "What to Watch" paragraph. Never end mid-sentence or mid-bullet.
+IMPORTANT: Complete the entire briefing including What to Watch. Never truncate mid-bullet.
 
 Respond only with the briefing."""
 
@@ -654,6 +680,7 @@ Respond only with the briefing."""
                         )
                         st.session_state[session_key] = msg.content[0].text
                         st.session_state[session_key + "_ts"] = now_local()
+                        st.session_state[session_key + "_idx"] = _art_index
                         # Persist AI summary to shared cache
                         _get_app_cache()["ai_summaries"][session_key] = msg.content[0].text
                         _get_app_cache()["ai_summaries"][session_key + "_ts"] = st.session_state[session_key + "_ts"]
@@ -661,8 +688,9 @@ Respond only with the briefing."""
                         st.error(f"AI summary error: {e}")
 
     if st.session_state[session_key]:
+        _art_idx_stored = st.session_state.get(session_key + "_idx", {})
         st.markdown(
-            '<div class="ai-summary">' + _summary_to_html(st.session_state[session_key]) + '</div>',
+            '<div class="ai-summary">' + _summary_to_html(st.session_state[session_key], _art_idx_stored) + '</div>',
             unsafe_allow_html=True
         )
 
@@ -1522,10 +1550,12 @@ with tab_market:
                 for _sec_arts in st.session_state.get("articles", {}).values():
                     _news_arts.extend(_sec_arts)
                 _news_arts.sort(key=lambda a: a.get("pub_dt") or __import__("datetime").datetime.min, reverse=True)
-                news_lines = "\n".join(
-                    f"- [{a.get('source','')}] {a.get('translated_title') or a.get('title','')}"
-                    for a in _news_arts[:30]
-                )
+                _wrap_art_index = {}
+                _news_lines_list = []
+                for _wi, _wa in enumerate(_news_arts[:30], 1):
+                    _wrap_art_index[_wi] = {"source": _wa.get("source",""), "url": _wa.get("url","")}
+                    _news_lines_list.append(f"{_wi}. [{_wa.get('source','')}] {_wa.get('translated_title') or _wa.get('title','')}")
+                news_lines = "\n".join(_news_lines_list)
                 # Recent filings
                 filings = st.session_state.get("filings", [])
                 filing_lines = "\n".join(
@@ -1551,16 +1581,17 @@ RECENT NEWS HEADLINES:
 RECENT TDnet FILINGS:
 {filing_lines}
 
-Write a COMPLETE daily market wrap covering:
-1. Opening paragraph: overall market tone and breadth (2-3 sentences)
-2. ## Sector Moves — what drove the biggest movers, with sector context
-3. ## Corporate Catalysts — any filings or news directly linked to big movers
-4. ## What to Watch — 2-3 forward-looking points for the next session
+Write a COMPLETE investment-focused daily market wrap:
+1. Opening paragraph: market tone, breadth context, and top investment implication (3-4 sentences)
+2. ## Sector Moves — biggest movers with sector context; note if part of a trend or one-off
+3. ## Corporate Catalysts — filings or news driving movers; include prior guidance/earnings for context
+4. ## Macro & FX — yen levels, rates, key macro developments with historical context
+5. ## What to Watch — 3-5 forward-looking catalysts with specific triggers to monitor
 
 Format rules:
-- Use ## for section headers
-- Bullet points under each section, max 20 words per bullet
-- Link to relevant headlines using the actual publication name, e.g. [Nikkei Asia](url), [Reuters](url), [Bloomberg Japan](url) — NEVER write [Link] or [Source]
+- ## headers for each section
+- Each bullet 2-3 sentences: key fact → context/comparison → investment implication
+- Cite news sources by index number in brackets at end of bullet, e.g. [3] or [7][12]
 - Be direct and analytical — no padding
 - COMPLETE the entire wrap, never truncate
 
@@ -1576,12 +1607,14 @@ Respond only with the market wrap."""
                         )
                         st.session_state.ai_market_wrap = _resp.content[0].text
                         st.session_state.ai_market_wrap_ts = now_local()
+                        st.session_state.ai_market_wrap_idx = _wrap_art_index
                     except Exception as e:
                         st.error(f"AI wrap error: {e}")
 
         if st.session_state.ai_market_wrap:
+            _wi = st.session_state.get("ai_market_wrap_idx", {})
             st.markdown(
-                _summary_to_html(st.session_state.ai_market_wrap),
+                _summary_to_html(st.session_state.ai_market_wrap, _wi),
                 unsafe_allow_html=True
             )
 
