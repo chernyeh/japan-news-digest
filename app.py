@@ -12,6 +12,56 @@ from watchlist import (load_watchlist, add_to_watchlist, remove_from_watchlist,
                        scan_all_watchlist, KNOWN_COMPANIES)
 from sentiment import score_all_sectors, flag_high_value_articles
 
+# ── Helper: Format links with source information ──────────────────────────────
+def format_link_with_source(url, title="link", source=None):
+    """
+    Format a link with source information.
+    If source is provided, displays as "[Source: link]" 
+    If not, falls back to just the URL title.
+    Returns markdown formatted link.
+    """
+    if source:
+        return f'[{source}: {title}]({url})'
+    return f'[{title}]({url})'
+
+def extract_source_from_url(url):
+    """Extract source domain name from URL for fallback."""
+    if not url:
+        return None
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc.replace('www.', '')
+        # Try to get a friendly name from the domain
+        source_name = domain.split('.')[0].replace('-', ' ').title()
+        return source_name
+    except:
+        return None
+
+def get_source_name_from_article(article_dict, source_map=None):
+    """
+    Extract source name from article data.
+    Checks: article['source'], source_map lookup, or falls back to URL domain.
+    """
+    if not article_dict:
+        return None
+    
+    # Try direct source field
+    if 'source' in article_dict and article_dict['source']:
+        return article_dict['source']
+    
+    # Try URL-based lookup
+    url = article_dict.get('url')
+    if url and source_map:
+        for src_name, src_url, _ in MEDIA_SOURCES:
+            if src_url in url or src_url.rstrip('/') in url.rstrip('/'):
+                return src_name
+    
+    # Fallback: extract from URL
+    if url:
+        return extract_source_from_url(url)
+    
+    return None
+
 # ── Shared in-memory cache (survives browser close, lives as long as app is awake) ──
 # Uses st.cache_resource so it's shared across ALL sessions on the same server instance.
 # This means your data persists when you close and reopen the tab.
@@ -501,12 +551,29 @@ def _summary_to_html(text: str) -> str:
         # Convert **bold** → <strong>
         line = _re2.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", line)
 
-        # Convert [text](url) → Link button, skip if URL looks truncated/invalid
+        # Convert [text](url) → Link button with source info, skip if URL looks truncated/invalid
         def _make_link(m):
             _u = m.group(2).strip()
+            _link_text = m.group(1).strip()
             if not _u or not _u.startswith("http") or len(_u) < 12:
-                return m.group(1)
-            return f'<a class="summary-link" href="{_u}" target="_blank">Link</a>'
+                return _link_text
+            
+            # Try to get source name
+            source_name = None
+            for src_name, src_url, _ in MEDIA_SOURCES:
+                if src_url.rstrip('/') in _u.rstrip('/'):
+                    source_name = src_name
+                    break
+            
+            # Fallback: extract from domain
+            if not source_name:
+                source_name = extract_source_from_url(_u)
+            
+            # Use source name if found, otherwise fallback to "Link"
+            display_text = source_name if source_name else "Link"
+            
+            return f'<a class="summary-link" href="{_u}" target="_blank">{display_text}</a>'
+        
         line = _re2.sub(r"\[([^\]]+)\]\(([^)]+)\)", _make_link, line)
 
         if line.startswith("## "):
