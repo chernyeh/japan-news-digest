@@ -573,8 +573,11 @@ def render_ai_summary(articles: list, context: str, session_key: str, max_articl
         gen_btn = st.button("✨ Summarise", key=f"btn_{session_key}", use_container_width=True)
     with col_s1:
         if st.session_state[session_key]:
+            _sum_ts = st.session_state.get(session_key + "_ts")
+            _sum_ts_str = (" · generated " + format_local_dt(_sum_ts)) if _sum_ts else ""
             st.markdown(
-                '<div style="font-size:0.68rem;color:#9B8B7A;padding-top:0.45rem;">AI summary generated · click ✨ Summarise to refresh</div>',
+                f'<div style="font-size:0.68rem;color:#9B8B7A;padding-top:0.45rem;">'  
+                f'✨ AI briefing{_sum_ts_str} · click Summarise to refresh</div>',
                 unsafe_allow_html=True
             )
 
@@ -650,8 +653,10 @@ Respond only with the briefing."""
                             messages=[{"role": "user", "content": prompt}]
                         )
                         st.session_state[session_key] = msg.content[0].text
+                        st.session_state[session_key + "_ts"] = now_local()
                         # Persist AI summary to shared cache
                         _get_app_cache()["ai_summaries"][session_key] = msg.content[0].text
+                        _get_app_cache()["ai_summaries"][session_key + "_ts"] = st.session_state[session_key + "_ts"]
                     except Exception as e:
                         st.error(f"AI summary error: {e}")
 
@@ -1492,7 +1497,13 @@ with tab_market:
             gen_wrap = st.button("✨ Generate", key="btn_market_wrap", use_container_width=True)
         with col_w1:
             if st.session_state.ai_market_wrap:
-                st.markdown('<div style="font-size:0.68rem;color:#9B8B7A;padding-top:0.45rem;">AI wrap generated · click Generate to refresh</div>', unsafe_allow_html=True)
+                _wrap_ts = st.session_state.get("ai_market_wrap_ts")
+            _wrap_ts_str = (" · generated " + format_local_dt(_wrap_ts)) if _wrap_ts else ""
+            st.markdown(
+                f'<div style="font-size:0.68rem;color:#9B8B7A;padding-top:0.45rem;">'
+                f'✨ Market wrap{_wrap_ts_str} · click Generate to refresh</div>',
+                unsafe_allow_html=True
+            )
 
         if gen_wrap:
             api_key = get_secret("ANTHROPIC_API_KEY")
@@ -1564,6 +1575,7 @@ Respond only with the market wrap."""
                             messages=[{"role": "user", "content": prompt}]
                         )
                         st.session_state.ai_market_wrap = _resp.content[0].text
+                        st.session_state.ai_market_wrap_ts = now_local()
                     except Exception as e:
                         st.error(f"AI wrap error: {e}")
 
