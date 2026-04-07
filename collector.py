@@ -59,6 +59,7 @@ RSS_SOURCES = [
     # Reuters company-specific Japan
     ("Reuters Japan Companies", "https://news.google.com/rss/search?q=reuters+japan+(earnings+OR+profit+OR+forecast+OR+acquisition+OR+merger+OR+dividend)&hl=en&gl=JP&ceid=JP:en", "en"),
     # Bloomberg Japan company news via Google News proxy
+    ("Bloomberg Japan",      "https://news.google.com/rss/search?q=bloomberg+japan+economy+OR+markets+OR+business&hl=en&gl=JP&ceid=JP:en", "en"),
     ("Bloomberg Japan Co",    "https://news.google.com/rss/search?q=bloomberg+japan+(earnings+OR+results+OR+forecast+OR+buyback+OR+dividend+OR+acquisition)&hl=en&gl=JP&ceid=JP:en", "en"),
 ]
 
@@ -786,6 +787,7 @@ SOURCE_DIRECTORY = {
     "Minkabu":               ("https://minkabu.jp/rss/news",                            "ja"),
     "Traders Web":           ("https://www.traders.co.jp/news/rss_all.aspx",            "ja"),
     "Reuters Japan Companies": ("https://news.google.com/rss/search?q=reuters+japan+(earnings+OR+profit+OR+forecast+OR+acquisition+OR+merger+OR+dividend)&hl=en&gl=JP&ceid=JP:en", "en"),
+    "Bloomberg Japan":      ("https://news.google.com/rss/search?q=bloomberg+japan+economy+OR+markets+OR+business&hl=en&gl=JP&ceid=JP:en", "en"),
     "Bloomberg Japan Co":    ("https://news.google.com/rss/search?q=bloomberg+japan+(earnings+OR+results+OR+forecast+OR+buyback+OR+dividend+OR+acquisition)&hl=en&gl=JP&ceid=JP:en", "en"),
 }
 
@@ -796,7 +798,7 @@ SOURCE_GROUPS = {
         "Reuters Japan", "NHK World Business", "Japan Industry News",
     ],
     "🇬🇧 English — Company News": [
-        "Reuters Japan Companies", "Bloomberg Japan Co",
+        "Bloomberg Japan", "Reuters Japan Companies", "Bloomberg Japan Co",
     ],
     "📊 Nikkei Group": [
         "Nikkei Asia", "Nikkei Shimbun", "Nikkei Business",

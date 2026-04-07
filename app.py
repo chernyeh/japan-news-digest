@@ -12,67 +12,6 @@ from watchlist import (load_watchlist, add_to_watchlist, remove_from_watchlist,
                        scan_all_watchlist, KNOWN_COMPANIES)
 from sentiment import score_all_sectors, flag_high_value_articles
 
-# ── Helper: Format links with source information ──────────────────────────────
-def format_link_with_source(url, title="link", source=None):
-    """
-    Format a link with source information.
-    If source is provided, displays as "[Source: link]" 
-    If not, falls back to just the URL title.
-    Returns markdown formatted link.
-    """
-    if source:
-        return f'[{source}: {title}]({url})'
-    return f'[{title}]({url})'
-
-def extract_domain_from_url(url):
-    """Extract domain from URL for comparison."""
-    if not url:
-        return None
-    try:
-        from urllib.parse import urlparse
-        domain = urlparse(url).netloc.lower().replace('www.', '')
-        return domain
-    except:
-        return None
-
-def extract_source_from_url(url):
-    """Extract source domain name from URL for fallback."""
-    if not url:
-        return None
-    try:
-        from urllib.parse import urlparse
-        domain = urlparse(url).netloc.replace('www.', '').lower()
-        # Try to get a friendly name from the domain
-        source_name = domain.split('.')[0].replace('-', ' ').title()
-        return source_name
-    except:
-        return None
-
-def get_source_name_from_article(article_dict, source_map=None):
-    """
-    Extract source name from article data.
-    Checks: article['source'], source_map lookup, or falls back to URL domain.
-    """
-    if not article_dict:
-        return None
-    
-    # Try direct source field
-    if 'source' in article_dict and article_dict['source']:
-        return article_dict['source']
-    
-    # Try URL-based lookup
-    url = article_dict.get('url')
-    if url and source_map:
-        for src_name, src_url, _ in MEDIA_SOURCES:
-            if src_url in url or src_url.rstrip('/') in url.rstrip('/'):
-                return src_name
-    
-    # Fallback: extract from URL
-    if url:
-        return extract_source_from_url(url)
-    
-    return None
-
 # ── Shared in-memory cache (survives browser close, lives as long as app is awake) ──
 # Uses st.cache_resource so it's shared across ALL sessions on the same server instance.
 # This means your data persists when you close and reopen the tab.
@@ -148,6 +87,7 @@ MEDIA_SOURCES = [
     ("Nikkan Kensetsu",     "https://www.constnews.com/",                 "🏗️"),
     ("Nihon Nogyo",         "https://www.agrinews.co.jp/",                "🌾"),
     ("IT Media Business",   "https://www.itmedia.co.jp/business/",       "💻"),
+    ("Bloomberg Japan",     "https://www.bloomberg.com/asia",               "📰"),
     ("Japan Industry News", "https://japanindustrynews.com/",             "🏭"),
     ("FACTA",               "https://facta.co.jp/",                        "🔍"),
 ]
@@ -562,34 +502,15 @@ def _summary_to_html(text: str) -> str:
         # Convert **bold** → <strong>
         line = _re2.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", line)
 
-        # Convert [text](url) → Link button with source info, skip if URL looks truncated/invalid
+        # Convert [Source Name](url) → source-labelled button
         def _make_link(m):
-            _u = m.group(2).strip()
-            _link_text = m.group(1).strip()
+            _label = m.group(1).strip()
+            _u     = m.group(2).strip()
             if not _u or not _u.startswith("http") or len(_u) < 12:
-                return _link_text
-            
-            # Try to get source name by domain matching
-            source_name = None
-            article_domain = extract_domain_from_url(_u)
-            
-            if article_domain:
-                # Try to match against MEDIA_SOURCES
-                for src_name, src_url, _ in MEDIA_SOURCES:
-                    src_domain = extract_domain_from_url(src_url)
-                    if src_domain and src_domain in article_domain:
-                        source_name = src_name
-                        break
-            
-            # Fallback: extract from domain if no match found
-            if not source_name:
-                source_name = extract_source_from_url(_u)
-            
-            # Use source name if found, otherwise fallback to "Link"
-            display_text = source_name if source_name else "Link"
-            
-            return f'<a class="summary-link" href="{_u}" target="_blank">{display_text}</a>'
-        
+                return _label
+            # Truncate very long labels (e.g. full article titles used as link text)
+            _display = _label if len(_label) <= 30 else _label[:28] + "…"
+            return f'<a class="summary-link" href="{_u}" target="_blank">{_display}</a>'
         line = _re2.sub(r"\[([^\]]+)\]\(([^)]+)\)", _make_link, line)
 
         if line.startswith("## "):
@@ -745,7 +666,7 @@ st.markdown(f"""
     <div class="masthead-sub">Japan equities · macro · corporate news · TDnet filings · JPY rates</div>
     <div class="masthead-date">{now_local().strftime('%A, %d %B %Y · %H:%M MYT')}</div>
 </div>
-<div class="dateline-strip">Petaling Jaya · Nikkei 225 · TOPIX · JPY Rates · TSE Timely Disclosures · 32 News Sources</div>
+<div class="dateline-strip">Petaling Jaya · Nikkei 225 · TOPIX · JPY Rates · TSE Timely Disclosures · 33 News Sources</div>
 """, unsafe_allow_html=True)
 
 # ── Market ticker strip ───────────────────────────────────────────────────────
