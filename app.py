@@ -24,13 +24,24 @@ def format_link_with_source(url, title="link", source=None):
         return f'[{source}: {title}]({url})'
     return f'[{title}]({url})'
 
+def extract_domain_from_url(url):
+    """Extract domain from URL for comparison."""
+    if not url:
+        return None
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc.lower().replace('www.', '')
+        return domain
+    except:
+        return None
+
 def extract_source_from_url(url):
     """Extract source domain name from URL for fallback."""
     if not url:
         return None
     try:
         from urllib.parse import urlparse
-        domain = urlparse(url).netloc.replace('www.', '')
+        domain = urlparse(url).netloc.replace('www.', '').lower()
         # Try to get a friendly name from the domain
         source_name = domain.split('.')[0].replace('-', ' ').title()
         return source_name
@@ -558,14 +569,19 @@ def _summary_to_html(text: str) -> str:
             if not _u or not _u.startswith("http") or len(_u) < 12:
                 return _link_text
             
-            # Try to get source name
+            # Try to get source name by domain matching
             source_name = None
-            for src_name, src_url, _ in MEDIA_SOURCES:
-                if src_url.rstrip('/') in _u.rstrip('/'):
-                    source_name = src_name
-                    break
+            article_domain = extract_domain_from_url(_u)
             
-            # Fallback: extract from domain
+            if article_domain:
+                # Try to match against MEDIA_SOURCES
+                for src_name, src_url, _ in MEDIA_SOURCES:
+                    src_domain = extract_domain_from_url(src_url)
+                    if src_domain and src_domain in article_domain:
+                        source_name = src_name
+                        break
+            
+            # Fallback: extract from domain if no match found
             if not source_name:
                 source_name = extract_source_from_url(_u)
             
