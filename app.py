@@ -509,7 +509,7 @@ def _summary_to_html(text: str) -> str:
             if not _u or not _u.startswith("http") or len(_u) < 12:
                 return _label
             # Truncate very long labels (e.g. full article titles used as link text)
-            _display = _label if len(_label) <= 30 else _label[:28] + "…"
+            _display = _label if len(_label) <= 40 else _label[:38] + "…"
             return f'<a class="summary-link" href="{_u}" target="_blank">{_display}</a>'
         line = _re2.sub(r"\[([^\]]+)\]\(([^)]+)\)", _make_link, line)
 
@@ -610,7 +610,7 @@ ANTHROPIC_API_KEY = "sk-ant-..."
                     url    = a.get("url","")
                     source = a.get("source","")
                     pub    = a.get("pub_date","")
-                    lines.append(f"{i}. [{source}] {title} | {pub} | {url}")
+                    lines.append(f"{i}. source={source} | {title} | {pub} | {url}")
                 article_text = "\n".join(lines)
 
                 prompt = f"""You are an analyst helping a Malaysian investor track Japan business and investment news.
@@ -624,12 +624,14 @@ Write a COMPLETE structured briefing that covers ALL significant stories above. 
 Structure:
 1. Opens with 2-3 sentences on the overall mood/theme
 2. Groups ALL stories into thematic clusters — use as many clusters as needed to cover everything (e.g. "BOJ & Macro", "Corporate Earnings", "M&A / Restructuring", "Yen & FX", "Sector Moves", "Politics & Policy", "Technology", "Energy" etc.)
-3. Under each cluster: bullet points for every notable development, each ending with a markdown hyperlink [Source Name](url)
+3. Under each cluster: bullet points for every notable development, each ending with a source link in this exact format: [Publication Name](url)
 4. Closes with 2-3 sentences on key things to watch
 
 Format rules:
 - Use markdown ## headers for each cluster
-- One tight sentence per bullet (max 20 words) + link — be concise, not verbose
+- One tight sentence per bullet (max 20 words) + source link — be concise, not verbose
+- CRITICAL: Links must use the ACTUAL publication name from the article list, e.g. [Nikkei Asia](url), [Reuters](url), [Bloomberg Japan](url) — NEVER write [Link] or [Source]
+- Use ONE link per bullet maximum — pick the single most relevant source
 - If multiple articles support a point, link the most relevant one
 - Cover every meaningful story — do not skip or truncate mid-briefing
 - Do not reproduce article titles verbatim; synthesise them
@@ -1547,7 +1549,7 @@ Write a COMPLETE daily market wrap covering:
 Format rules:
 - Use ## for section headers
 - Bullet points under each section, max 20 words per bullet
-- Link to relevant headlines where possible using [Source](url)
+- Link to relevant headlines using the actual publication name, e.g. [Nikkei Asia](url), [Reuters](url), [Bloomberg Japan](url) — NEVER write [Link] or [Source]
 - Be direct and analytical — no padding
 - COMPLETE the entire wrap, never truncate
 
